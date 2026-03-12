@@ -1,0 +1,8 @@
+mobile/
+.git/
+node_modules/
+.expo/
+*.log
+.DS_Store
+scripts/seed.js
+scripts/update-ip.js
