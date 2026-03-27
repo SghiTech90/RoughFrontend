@@ -145,11 +145,12 @@ async function generateQuestionsForTopic(topic, userId) {
       const questionDocs = questions.map((q) => ({
         topicId: topic._id,
         userId,
-        // Fallback for different key names the AI might invent
         questionText: q.questionText || q.question || q.text || q.question_text || 'Missing question text',
         type: q.type || 'concept',
         difficulty: q.difficulty || 'medium',
+        difficultyLevel: q.difficultyLevel || null,
         expectedConcepts: q.expectedConcepts || q.expected_concepts || q.concepts || [],
+        source: 'ai',
       }));
 
       // Filter out invalid items just in case

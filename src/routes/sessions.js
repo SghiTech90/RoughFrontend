@@ -170,6 +170,35 @@ router.put('/:id/complete', protect, async (req, res) => {
   }
 });
 
+// @GET /api/sessions/history/by-date — sessions grouped by date for revision history
+// Must be declared BEFORE /:id to avoid route conflicts
+router.get('/history/by-date', protect, async (req, res) => {
+  try {
+    const sessions = await Session.find({ userId: req.user._id, status: 'completed' })
+      .populate('topicId', 'title category color')
+      .sort({ completedAt: -1, createdAt: -1 })
+      .limit(200);
+
+    // Group sessions by date string
+    const grouped = {};
+    for (const s of sessions) {
+      const d = new Date(s.completedAt || s.createdAt);
+      const key = d.toISOString().split('T')[0]; // YYYY-MM-DD
+      if (!grouped[key]) grouped[key] = [];
+      grouped[key].push(s);
+    }
+
+    // Convert to sorted array of { date, sessions }
+    const result = Object.entries(grouped)
+      .map(([date, sessions]) => ({ date, sessions }))
+      .sort((a, b) => (a.date < b.date ? 1 : -1));
+
+    res.json({ success: true, history: result });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
 // @GET /api/sessions
 router.get('/', protect, async (req, res) => {
   try {

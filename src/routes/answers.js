@@ -22,13 +22,14 @@ router.post('/submit', protect, async (req, res) => {
 
     const topic = question.topicId;
 
-    // AI Evaluation
+    // AI Evaluation — pass notes for richer context
     const evaluation = await evaluateAnswer(
       question.questionText,
       transcript,
       question.expectedConcepts,
       topic.title,
-      question.difficulty || 'medium'
+      question.difficulty || 'medium',
+      topic.notes || ''
     );
 
     // Create answer record
@@ -46,6 +47,9 @@ router.post('/submit', protect, async (req, res) => {
         suggestions: (evaluation.suggestions || []).slice(0, 3),
         overallFeedback: evaluation.overallFeedback || '',
         interviewFeedback: evaluation.interviewFeedback || '',
+        correctExplanation: evaluation.correctExplanation || '',
+        keyPoints: (evaluation.keyPoints || []).slice(0, 3),
+        followUpQuestion: evaluation.followUpQuestion || '',
       },
       duration,
     });
@@ -113,6 +117,9 @@ router.post('/submit', protect, async (req, res) => {
         suggestions: (evaluation.suggestions || []).slice(0, 3),
         overallFeedback: evaluation.overallFeedback || '',
         interviewFeedback: evaluation.interviewFeedback || '',
+        correctExplanation: evaluation.correctExplanation || '',
+        keyPoints: (evaluation.keyPoints || []).slice(0, 3),
+        followUpQuestion: evaluation.followUpQuestion || '',
       },
     });
   } catch (error) {
@@ -135,6 +142,36 @@ router.get('/history', protect, async (req, res) => {
       .limit(parseInt(limit));
 
     res.json({ success: true, count: answers.length, answers });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+// @GET /api/answers/saved — get all saved/liked answers for analytics
+router.get('/saved', protect, async (req, res) => {
+  try {
+    const answers = await Answer.find({ userId: req.user._id, savedByUser: true })
+      .populate('questionId', 'questionText difficulty type difficultyLevel')
+      .populate('topicId', 'title category color')
+      .populate('sessionId', 'completedAt createdAt mode')
+      .sort({ createdAt: -1 });
+
+    res.json({ success: true, count: answers.length, answers });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+// @PATCH /api/answers/:id/save — toggle save/like on an answer
+router.patch('/:id/save', protect, async (req, res) => {
+  try {
+    const answer = await Answer.findOne({ _id: req.params.id, userId: req.user._id });
+    if (!answer) return res.status(404).json({ success: false, message: 'Answer not found' });
+
+    answer.savedByUser = !answer.savedByUser;
+    await answer.save();
+
+    res.json({ success: true, savedByUser: answer.savedByUser });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }

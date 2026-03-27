@@ -18,13 +18,26 @@ const questionSchema = new mongoose.Schema(
     },
     type: {
       type: String,
-      enum: ['concept', 'explanation', 'scenario', 'practical'],
+      enum: ['concept', 'explanation', 'scenario', 'practical', 'interview'],
       default: 'concept',
     },
     difficulty: {
       type: String,
       enum: ['easy', 'medium', 'hard'],
       default: 'medium',
+    },
+    // 5-level difficulty ladder (1=Basic → 5=Interview)
+    difficultyLevel: {
+      type: Number,
+      min: 1,
+      max: 5,
+      default: null,
+    },
+    // Who created this question
+    source: {
+      type: String,
+      enum: ['user', 'ai'],
+      default: 'user',
     },
     expectedConcepts: [{ type: String }],
     timesAnswered: {

@@ -3,6 +3,7 @@ const router = express.Router();
 const Question = require('../models/Question');
 const Topic = require('../models/Topic');
 const { protect } = require('../middleware/auth');
+const { generateQuestions } = require('../services/aiService');
 
 // @GET /api/questions/topic/:topicId
 router.get('/topic/:topicId', protect, async (req, res) => {
@@ -10,15 +11,16 @@ router.get('/topic/:topicId', protect, async (req, res) => {
     if (!req.params.topicId || req.params.topicId === 'undefined') {
       return res.status(400).json({ success: false, message: 'Invalid topicId parameter' });
     }
-    const { difficulty, type, limit = 10 } = req.query;
+    const { difficulty, type, source, limit = 50 } = req.query;
     const filter = { topicId: req.params.topicId, userId: req.user._id };
 
     if (difficulty) filter.difficulty = difficulty;
     if (type) filter.type = type;
+    if (source) filter.source = source;
 
     const questions = await Question.find(filter)
       .limit(parseInt(limit))
-      .sort({ nextReviewDate: 1, averageScore: 1 });
+      .sort({ difficultyLevel: 1, nextReviewDate: 1, averageScore: 1 });
 
     res.json({ success: true, count: questions.length, questions });
   } catch (error) {
@@ -63,6 +65,55 @@ router.post('/topic/:topicId', protect, async (req, res) => {
 
     res.status(201).json({ success: true, question });
   } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+// @POST /api/questions/topic/:topicId/generate - Generate 5 AI questions (5-level difficulty)
+router.post('/topic/:topicId/generate', protect, async (req, res) => {
+  try {
+    const topic = await Topic.findOne({ _id: req.params.topicId, userId: req.user._id });
+    if (!topic) return res.status(404).json({ success: false, message: 'Topic not found' });
+
+    // Generate 5 levelled questions from AI
+    const aiQuestions = await generateQuestions(topic.title, topic.notes, topic.category);
+
+    if (!aiQuestions || aiQuestions.length === 0) {
+      return res.status(500).json({ success: false, message: 'AI failed to generate questions. Please try again.' });
+    }
+
+    // Map with fallbacks and tag as AI-generated
+    const questionDocs = aiQuestions.map((q) => ({
+      topicId: topic._id,
+      userId: req.user._id,
+      questionText: q.questionText || q.question || q.text || 'Missing question text',
+      type: q.type || 'concept',
+      difficulty: q.difficulty || 'medium',
+      difficultyLevel: q.difficultyLevel || null,
+      expectedConcepts: q.expectedConcepts || q.concepts || [],
+      source: 'ai',
+    }));
+
+    const validDocs = questionDocs.filter(q => q.questionText !== 'Missing question text');
+
+    if (validDocs.length === 0) {
+      return res.status(500).json({ success: false, message: 'AI returned no valid questions.' });
+    }
+
+    const insertedQuestions = await Question.insertMany(validDocs);
+
+    // Update topic question count
+    const totalCount = await Question.countDocuments({ topicId: topic._id, userId: req.user._id });
+    await Topic.findByIdAndUpdate(topic._id, { questionCount: totalCount });
+
+    res.status(201).json({
+      success: true,
+      count: insertedQuestions.length,
+      questions: insertedQuestions,
+      message: `Generated ${insertedQuestions.length} AI questions successfully`,
+    });
+  } catch (error) {
+    console.error('Generate questions error:', error);
     res.status(500).json({ success: false, message: error.message });
   }
 });

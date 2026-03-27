@@ -15,7 +15,7 @@ Revision AI/
 │   ├── models/             ← Mongoose models (User, Topic, Question, Answer, Session)
 │   ├── routes/             ← API routes (auth, topics, questions, sessions, answers, dashboard, speech)
 │   └── services/
-│       └── aiService.js    ← OpenAI GPT-4o + Whisper integration
+│       └── aiService.js    ← OpenAI gpt-5-mini + Whisper integration
 ├── mobile/                 ← React Native (Expo) app
 │   ├── App.js
 │   └── src/
@@ -42,7 +42,7 @@ Revision AI/
 ### Prerequisites
 - Node.js 18+
 - MongoDB (local or Atlas)
-- OpenAI API Key (with GPT-4o + Whisper access)
+- OpenAI API Key (with gpt-5-mini + Whisper access)
 - Expo Go app on your phone (iOS or Android)
 
 ---
@@ -96,7 +96,7 @@ Scan the QR code with Expo Go on your phone. Make sure your phone and PC are on 
 | `PORT` | Server port (default: 5000) |
 | `MONGO_URI` | MongoDB connection string |
 | `JWT_SECRET` | Secret key for JWT tokens |
-| `OPENAI_API_KEY` | Your OpenAI API key (GPT-4o + Whisper) |
+| `OPENAI_API_KEY` | Your OpenAI API key (gpt-5-mini + Whisper) |
 | `NODE_ENV` | `development` or `production` |
 
 ### Mobile `src/config/api.js`
@@ -112,7 +112,7 @@ Update `API_BASE_URL` to your machine's local IP address.
 | **Home** | Overview: streak, stats, quick actions, weak topics |
 | **Topics** | Add notes → AI generates questions automatically |
 | **Topic Detail** | View notes and generated questions |
-| **Revision** | Voice Q&A → Whisper → GPT-4o evaluation → feedback |
+| **Revision** | Voice Q&A → Whisper → gpt-5-mini evaluation → feedback |
 | **Analytics** | Weekly chart, mastery bars, AI insights |
 | **History** | Paginated session list |
 | **Settings** | Daily goal, difficulty, preferences |
@@ -121,14 +121,14 @@ Update `API_BASE_URL` to your machine's local IP address.
 
 ## 🤖 AI Features
 
-### Question Generation (GPT-4o)
+### Question Generation (gpt-5-mini)
 When you add a topic with notes, the AI automatically generates **8 diverse questions** covering:
 - Concept Questions
 - Explanation Questions
 - Scenario Questions
 - Practical Questions
 
-### Answer Evaluation (GPT-4o)
+### Answer Evaluation (gpt-5-mini)
 After you speak your answer, the AI returns:
 - **Score** (1–10)
 - **Correct points** ✅
@@ -141,7 +141,7 @@ Questions have a SM-2-inspired algorithm:
 - Good score → longer review interval
 - Poor score → short interval (review sooner)
 
-### Weekly Insights (GPT-4o)
+### Weekly Insights (gpt-5-mini)
 On-demand AI analysis of your learning patterns including strengths, areas to improve, and personalized recommendations.
 
 ---
@@ -169,7 +169,7 @@ On-demand AI analysis of your learning patterns including strengths, areas to im
 
 | Service | Est. Cost |
 |---------|-----------|
-| GPT-4o (questions + evaluation) | ~$5–$12 |
+| gpt-5-mini (questions + evaluation) | ~$3–$8 |
 | Whisper (transcription) | ~$2 |
 | MongoDB Atlas (free tier) | $0 |
 | Hosting (Railway/Render free) | $0–$5 |

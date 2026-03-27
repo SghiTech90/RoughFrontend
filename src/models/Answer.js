@@ -38,6 +38,13 @@ const answerSchema = new mongoose.Schema(
       suggestions: [{ type: String }],
       overallFeedback: { type: String },
       interviewFeedback: { type: String },
+      correctExplanation: { type: String },
+      keyPoints: [{ type: String }],
+      followUpQuestion: { type: String },
+    },
+    savedByUser: {
+      type: Boolean,
+      default: false,
     },
     audioUrl: {
       type: String,
