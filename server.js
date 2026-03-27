@@ -25,7 +25,11 @@ app.use(morgan('dev'));
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
-// API Welcome & Health Check
+// Root Welcome & Health Check
+app.get('/', (req, res) => {
+  res.json({ success: true, message: 'Revision AI Backend is Running!', api_root: '/api' });
+});
+
 app.get('/api', (req, res) => {
   res.json({ success: true, message: 'Welcome to Revision AI API', version: '1.0.0' });
 });
