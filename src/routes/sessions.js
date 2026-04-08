@@ -5,51 +5,77 @@ const Question = require('../models/Question');
 const Topic = require('../models/Topic');
 const { protect } = require('../middleware/auth');
 
-// @GET /api/sessions/active?topicId=xxx
+// @GET /api/sessions/active?topicId=xxx  (query param)
+// @GET /api/sessions/active/:topicId       (path param — same logic)
 // Must be declared BEFORE /:id route to avoid conflict
+async function getActiveSessionForTopic(userId, topicId) {
+  const session = await Session.findOne({
+    userId,
+    topicId,
+    status: 'active',
+  })
+    .populate('topicId', 'title category color')
+    .sort({ createdAt: -1 });
+
+  if (!session) return { session: null, answeredQuestionIds: [], firstUnansweredIndex: 0 };
+
+  const Answer = require('../models/Answer');
+  const answers = await Answer.find({ sessionId: session._id }).select('questionId');
+  const answeredQuestionIds = answers.map(a => a.questionId.toString());
+
+  let firstUnansweredIndex = 0;
+  if (session.questions && session.questions.length > 0) {
+    for (let i = 0; i < session.questions.length; i++) {
+      const qId = session.questions[i]._id || session.questions[i];
+      if (!answeredQuestionIds.includes(qId.toString())) {
+        firstUnansweredIndex = i;
+        break;
+      }
+    }
+  }
+
+  return { session, answeredQuestionIds, firstUnansweredIndex };
+}
+
 router.get('/active', protect, async (req, res) => {
   try {
     const { topicId } = req.query;
     if (!topicId || topicId === 'undefined') {
       return res.status(400).json({ success: false, message: 'topicId is required' });
     }
+    const data = await getActiveSessionForTopic(req.user._id, topicId);
+    res.json({ success: true, ...data });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
 
-    const session = await Session.findOne({
+// @GET /api/sessions/active/:topicId (path param version for mobile compatibility)
+router.get('/active/:topicId', protect, async (req, res) => {
+  try {
+    const { topicId } = req.params;
+    if (!topicId || topicId === 'undefined') {
+      return res.status(400).json({ success: false, message: 'topicId is required' });
+    }
+    const data = await getActiveSessionForTopic(req.user._id, topicId);
+    res.json({ success: true, ...data });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+// @GET /api/sessions/topic/:topicId — all sessions for a specific topic
+router.get('/topic/:topicId', protect, async (req, res) => {
+  try {
+    const { limit = 20 } = req.query;
+    const sessions = await Session.find({
       userId: req.user._id,
-      topicId,
-      status: 'active',
+      topicId: req.params.topicId,
     })
-      .populate('topicId', 'title category color')
-      .sort({ createdAt: -1 });
+      .sort({ createdAt: -1 })
+      .limit(parseInt(limit));
 
-    if (!session) {
-      return res.json({ success: true, session: null });
-    }
-
-    // Get the question IDs already answered in this session
-    const Answer = require('../models/Answer');
-    const answers = await Answer.find({ sessionId: session._id }).select('questionId');
-    const answeredQuestionIds = answers.map(a => a.questionId.toString());
-
-    // Find the first index that hasn't been answered
-    let firstUnansweredIndex = 0;
-    if (session.questions && session.questions.length > 0) {
-      for (let i = 0; i < session.questions.length; i++) {
-        const qId = session.questions[i]._id || session.questions[i];
-        if (!answeredQuestionIds.includes(qId.toString())) {
-          firstUnansweredIndex = i;
-          break;
-        }
-        // If all answered, it will stay at the last index or handle complete state
-      }
-    }
-
-    res.json({
-      success: true,
-      session,
-      answeredQuestionIds,
-      firstUnansweredIndex,
-    });
+    res.json({ success: true, sessions });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }

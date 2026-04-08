@@ -118,6 +118,51 @@ router.post('/topic/:topicId/generate', protect, async (req, res) => {
   }
 });
 
+// @POST /api/questions/generate-ai/:topicId — alias for mobile compatibility
+router.post('/generate-ai/:topicId', protect, async (req, res) => {
+  try {
+    const topic = await Topic.findOne({ _id: req.params.topicId, userId: req.user._id });
+    if (!topic) return res.status(404).json({ success: false, message: 'Topic not found' });
+
+    const aiQuestions = await generateQuestions(topic.title, topic.notes, topic.category);
+
+    if (!aiQuestions || aiQuestions.length === 0) {
+      return res.status(500).json({ success: false, message: 'AI failed to generate questions. Please try again.' });
+    }
+
+    const questionDocs = aiQuestions.map((q) => ({
+      topicId: topic._id,
+      userId: req.user._id,
+      questionText: q.questionText || q.question || q.text || 'Missing question text',
+      type: q.type || 'concept',
+      difficulty: q.difficulty || 'medium',
+      difficultyLevel: q.difficultyLevel || null,
+      expectedConcepts: q.expectedConcepts || q.concepts || [],
+      source: 'ai',
+    }));
+
+    const validDocs = questionDocs.filter(q => q.questionText !== 'Missing question text');
+    if (validDocs.length === 0) {
+      return res.status(500).json({ success: false, message: 'AI returned no valid questions.' });
+    }
+
+    const insertedQuestions = await Question.insertMany(validDocs);
+    const totalCount = await Question.countDocuments({ topicId: topic._id, userId: req.user._id });
+    await Topic.findByIdAndUpdate(topic._id, { questionCount: totalCount });
+
+    res.status(201).json({
+      success: true,
+      count: insertedQuestions.length,
+      questions: insertedQuestions,
+      message: `Generated ${insertedQuestions.length} AI questions successfully`,
+    });
+  } catch (error) {
+    console.error('Generate AI questions error:', error);
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+
 // @GET /api/questions/due - Spaced repetition: questions due for review
 router.get('/due', protect, async (req, res) => {
   try {
