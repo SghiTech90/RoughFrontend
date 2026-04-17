@@ -5,7 +5,7 @@ const Topic = require('../models/Topic');
 const { protect } = require('../middleware/auth');
 const { generateQuestions } = require('../services/aiService');
 
-const MAX_QUESTIONS_PER_TOPIC = 50;
+const MAX_QUESTIONS_PER_TOPIC = 200;
 
 // @GET /api/questions/topic/:topicId
 router.get('/topic/:topicId', protect, async (req, res) => {
