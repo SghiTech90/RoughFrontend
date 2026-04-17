@@ -73,38 +73,49 @@ router.post('/submit', protect, async (req, res) => {
     const nextReviewDate = new Date();
     nextReviewDate.setDate(nextReviewDate.getDate() + interval);
 
-    await Question.findByIdAndUpdate(questionId, {
-      timesAnswered: newTimesAnswered,
-      averageScore: parseFloat(newAvgScore.toFixed(2)),
-      lastAnswered: new Date(),
-      interval,
-      easeFactor,
-      nextReviewDate,
-    });
+    const updates = [
+      Question.findByIdAndUpdate(questionId, {
+        timesAnswered: newTimesAnswered,
+        averageScore: parseFloat(newAvgScore.toFixed(2)),
+        lastAnswered: new Date(),
+        interval,
+        easeFactor,
+        nextReviewDate,
+      }),
+    ];
 
-    // Update session stats
+    // Update session stats in parallel when session exists
     if (sessionId) {
-      const session = await Session.findById(sessionId);
-      if (session) {
-        const newTotalScore = session.totalScore + evaluation.score;
-        const newQuestionsAnswered = session.questionsAnswered + 1;
-
-        await Session.findByIdAndUpdate(sessionId, {
-          totalScore: newTotalScore,
-          questionsAnswered: newQuestionsAnswered,
-          averageScore: parseFloat((newTotalScore / newQuestionsAnswered).toFixed(2)),
-          $push: { answers: answer._id },
-        });
-      }
+      updates.push(
+        Session.findById(sessionId).then((session) => {
+          if (!session) return null;
+          const newTotalScore = session.totalScore + evaluation.score;
+          const newQuestionsAnswered = session.questionsAnswered + 1;
+          return Session.findByIdAndUpdate(sessionId, {
+            totalScore: newTotalScore,
+            questionsAnswered: newQuestionsAnswered,
+            averageScore: parseFloat((newTotalScore / newQuestionsAnswered).toFixed(2)),
+            $push: { answers: answer._id },
+          });
+        })
+      );
     }
 
-    // Update topic mastery level
-    const topicAnswers = await Answer.find({ topicId: topic._id, userId: req.user._id });
-    if (topicAnswers.length > 0) {
-      const topicAvg = topicAnswers.reduce((sum, a) => sum + a.score, 0) / topicAnswers.length;
-      const masteryLevel = Math.round((topicAvg / 10) * 100);
-      await Topic.findByIdAndUpdate(topic._id, { masteryLevel });
-    }
+    await Promise.all(updates);
+
+    // Non-blocking mastery recalculation (avoid delaying response path)
+    Answer.aggregate([
+      { $match: { topicId: topic._id, userId: req.user._id } },
+      { $group: { _id: null, avgScore: { $avg: '$score' } } },
+    ])
+      .then((result) => {
+        if (!result || result.length === 0) return null;
+        const masteryLevel = Math.round((result[0].avgScore / 10) * 100);
+        return Topic.findByIdAndUpdate(topic._id, { masteryLevel });
+      })
+      .catch((err) => {
+        console.error('Topic mastery update error:', err.message);
+      });
 
     res.json({
       success: true,
@@ -172,6 +183,84 @@ router.patch('/:id/save', protect, async (req, res) => {
     await answer.save();
 
     res.json({ success: true, savedByUser: answer.savedByUser });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+// @GET /api/answers/:id/delete-impact — preview what will be deleted (for confirmations)
+// Must be declared BEFORE /:id routes that may conflict in other routers
+router.get('/:id/delete-impact', protect, async (req, res) => {
+  try {
+    const answer = await Answer.findOne({ _id: req.params.id, userId: req.user._id }).select('savedByUser sessionId topicId questionId createdAt');
+    if (!answer) return res.status(404).json({ success: false, message: 'Answer not found' });
+
+    res.json({
+      success: true,
+      impact: {
+        answerId: answer._id,
+        savedByUser: !!answer.savedByUser,
+        sessionId: answer.sessionId || null,
+        topicId: answer.topicId,
+        questionId: answer.questionId,
+        createdAt: answer.createdAt,
+      },
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+// @DELETE /api/answers/:id — delete a single answer attempt (history item)
+router.delete('/:id', protect, async (req, res) => {
+  try {
+    const force = String(req.query.force || '').toLowerCase() === 'true';
+    const answer = await Answer.findOne({ _id: req.params.id, userId: req.user._id });
+    if (!answer) return res.status(404).json({ success: false, message: 'Answer not found' });
+
+    if (!force && answer.savedByUser) {
+      return res.status(409).json({
+        success: false,
+        code: 'CONFIRM_DELETE_REQUIRED',
+        message: 'This history item is saved. Deleting it will remove it from Saved too.',
+        impact: { answerId: answer._id, savedByUser: true },
+      });
+    }
+
+    await Answer.deleteOne({ _id: answer._id, userId: req.user._id });
+    res.json({ success: true, message: 'Answer deleted successfully', deleted: { answerId: answer._id, savedByUser: !!answer.savedByUser } });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+// @DELETE /api/answers/history/clear — clear all answers for this user (analytics/history reset)
+router.delete('/history/clear', protect, async (req, res) => {
+  try {
+    const force = String(req.query.force || '').toLowerCase() === 'true';
+    const [totalAnswers, savedAnswers] = await Promise.all([
+      Answer.countDocuments({ userId: req.user._id }),
+      Answer.countDocuments({ userId: req.user._id, savedByUser: true }),
+    ]);
+
+    if (!force && savedAnswers > 0) {
+      return res.status(409).json({
+        success: false,
+        code: 'CONFIRM_DELETE_REQUIRED',
+        message: `You have ${savedAnswers} saved answer${savedAnswers !== 1 ? 's' : ''}. Clearing history will remove them from Saved too.`,
+        impact: { totalAnswers, savedAnswers },
+      });
+    }
+
+    const result = await Answer.deleteMany({ userId: req.user._id });
+    res.json({
+      success: true,
+      message: 'History cleared successfully',
+      deleted: {
+        answers: result?.deletedCount ?? totalAnswers,
+        savedAnswers,
+      },
+    });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }

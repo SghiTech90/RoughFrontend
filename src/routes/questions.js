@@ -162,6 +162,59 @@ router.post('/generate-ai/:topicId', protect, async (req, res) => {
   }
 });
 
+// @PUT /api/questions/:id - Edit a question
+router.put('/:id', protect, async (req, res) => {
+  try {
+    const { questionText, expectedConcepts, type, difficulty } = req.body;
+
+    const question = await Question.findOne({ _id: req.params.id, userId: req.user._id });
+    if (!question) return res.status(404).json({ success: false, message: 'Question not found' });
+
+    if (questionText !== undefined) {
+      if (!String(questionText).trim()) {
+        return res.status(400).json({ success: false, message: 'Question text cannot be empty' });
+      }
+      question.questionText = String(questionText).trim();
+    }
+
+    if (expectedConcepts !== undefined) {
+      if (Array.isArray(expectedConcepts)) {
+        question.expectedConcepts = expectedConcepts.map(c => String(c).trim()).filter(Boolean);
+      } else if (typeof expectedConcepts === 'string') {
+        question.expectedConcepts = expectedConcepts.split(',').map(c => c.trim()).filter(Boolean);
+      } else {
+        question.expectedConcepts = [];
+      }
+    }
+
+    if (type !== undefined) question.type = type;
+    if (difficulty !== undefined) question.difficulty = difficulty;
+
+    await question.save();
+    res.json({ success: true, question });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+// @DELETE /api/questions/:id - Delete a question
+router.delete('/:id', protect, async (req, res) => {
+  try {
+    const question = await Question.findOne({ _id: req.params.id, userId: req.user._id });
+    if (!question) return res.status(404).json({ success: false, message: 'Question not found' });
+
+    const topicId = question.topicId;
+    await Question.findByIdAndDelete(question._id);
+
+    const totalCount = await Question.countDocuments({ topicId, userId: req.user._id });
+    await Topic.findByIdAndUpdate(topicId, { questionCount: totalCount });
+
+    res.json({ success: true, message: 'Question deleted successfully' });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
 
 // @GET /api/questions/due - Spaced repetition: questions due for review
 router.get('/due', protect, async (req, res) => {

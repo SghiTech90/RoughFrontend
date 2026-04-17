@@ -4,6 +4,24 @@ const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
 });
 
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+async function createChatCompletionWithRetry(payload, retries = 1) {
+  let lastError;
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    try {
+      return await openai.chat.completions.create(payload, {
+        timeout: 45000,
+      });
+    } catch (error) {
+      lastError = error;
+      if (attempt === retries) break;
+      await sleep(500 * (attempt + 1));
+    }
+  }
+  throw lastError;
+}
+
 /**
  * Generate questions from topic notes
  */
@@ -43,7 +61,7 @@ Rules:
 - Return ONLY the JSON, no other text.`;
 
   try {
-    const response = await openai.chat.completions.create({
+    const response = await createChatCompletionWithRetry({
       model: 'gpt-5-mini',
       messages: [{ role: 'user', content: prompt }],
       response_format: { type: 'json_object' },
@@ -143,7 +161,7 @@ Scoring guide:
 - 1-2: Incorrect or very minimal understanding`;
 
   try {
-    const response = await openai.chat.completions.create({
+    const response = await createChatCompletionWithRetry({
       model: 'gpt-5-mini',
       messages: [{ role: 'user', content: prompt }],
       response_format: { type: 'json_object' },
@@ -190,7 +208,7 @@ Generate insights in this JSON format:
 Return ONLY the JSON object.`;
 
   try {
-    const response = await openai.chat.completions.create({
+    const response = await createChatCompletionWithRetry({
       model: 'gpt-5-mini',
       messages: [{ role: 'user', content: prompt }],
       response_format: { type: 'json_object' },
@@ -227,7 +245,7 @@ const analyzeNotes = async (notes) => {
   }`;
 
   try {
-    const response = await openai.chat.completions.create({
+    const response = await createChatCompletionWithRetry({
       model: 'gpt-5-mini',
       messages: [{ role: 'user', content: prompt }],
       response_format: { type: 'json_object' },

@@ -6,6 +6,7 @@ const cors = require('cors');
 const helmet = require('helmet');
 const morgan = require('morgan');
 const connectDB = require('./src/config/db');
+const { isDBConnected } = require('./src/config/db');
 
 // Routes
 const authRoutes = require('./src/routes/auth');
@@ -35,7 +36,12 @@ app.get('/api', (req, res) => {
 });
 
 app.get('/health', (req, res) => {
-  res.json({ status: 'OK', timestamp: new Date().toISOString(), service: 'Revision AI Backend' });
+  res.json({
+    status: 'OK',
+    timestamp: new Date().toISOString(),
+    service: 'Revision AI Backend',
+    dbConnected: isDBConnected(),
+  });
 });
 
 // API Routes

@@ -249,6 +249,32 @@ router.get('/', protect, async (req, res) => {
   }
 });
 
+// @GET /api/sessions/:id/delete-impact — preview what will be deleted (for confirmations)
+// Must be declared BEFORE /:id to avoid route conflicts
+router.get('/:id/delete-impact', protect, async (req, res) => {
+  try {
+    const session = await Session.findOne({ _id: req.params.id, userId: req.user._id });
+    if (!session) return res.status(404).json({ success: false, message: 'Session not found' });
+
+    const Answer = require('../models/Answer');
+    const [totalAnswers, savedAnswers] = await Promise.all([
+      Answer.countDocuments({ sessionId: session._id, userId: req.user._id }),
+      Answer.countDocuments({ sessionId: session._id, userId: req.user._id, savedByUser: true }),
+    ]);
+
+    res.json({
+      success: true,
+      impact: {
+        sessionId: session._id,
+        totalAnswers,
+        savedAnswers,
+      },
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
 // @GET /api/sessions/:id
 router.get('/:id', protect, async (req, res) => {
   try {
@@ -276,12 +302,35 @@ router.delete('/:id', protect, async (req, res) => {
 
     // Delete associated answers
     const Answer = require('../models/Answer');
-    await Answer.deleteMany({ sessionId: session._id });
+    const force = String(req.query.force || '').toLowerCase() === 'true';
+    const [totalAnswers, savedAnswers] = await Promise.all([
+      Answer.countDocuments({ sessionId: session._id, userId: req.user._id }),
+      Answer.countDocuments({ sessionId: session._id, userId: req.user._id, savedByUser: true }),
+    ]);
+
+    if (!force && savedAnswers > 0) {
+      return res.status(409).json({
+        success: false,
+        code: 'CONFIRM_DELETE_REQUIRED',
+        message: `This session contains ${savedAnswers} saved answer${savedAnswers !== 1 ? 's' : ''}. Deleting it will remove them from Saved too.`,
+        impact: { sessionId: session._id, totalAnswers, savedAnswers },
+      });
+    }
+
+    const deleteResult = await Answer.deleteMany({ sessionId: session._id, userId: req.user._id });
 
     // Delete session
     await Session.findByIdAndDelete(session._id);
 
-    res.json({ success: true, message: 'Session deleted successfully' });
+    res.json({
+      success: true,
+      message: 'Session deleted successfully',
+      deleted: {
+        sessionId: session._id,
+        answers: deleteResult?.deletedCount ?? totalAnswers,
+        savedAnswers,
+      },
+    });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }

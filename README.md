@@ -184,3 +184,7 @@ On-demand AI analysis of your learning patterns including strengths, areas to im
 - [ ] Multi-user support
 - [ ] Web version (Next.js)
 - [ ] Export reports as PDF
+
+
+cd mobile
+eas build --platform android --profile preview
