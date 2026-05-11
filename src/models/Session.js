@@ -61,6 +61,10 @@ const sessionSchema = new mongoose.Schema(
       type: Date,
       default: null,
     },
+    lastResumeIndex: {
+      type: Number,
+      default: 0,
+    },
   },
   { timestamps: true, toJSON: { virtuals: true }, toObject: { virtuals: true } }
 );

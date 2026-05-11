@@ -34,6 +34,11 @@ async function getActiveSessionForTopic(userId, topicId) {
     }
   }
 
+  // Prefer lastResumeIndex saved on pause (user may have been viewing a later question)
+  if (typeof session.lastResumeIndex === 'number' && session.lastResumeIndex > firstUnansweredIndex) {
+    firstUnansweredIndex = session.lastResumeIndex;
+  }
+
   return { session, answeredQuestionIds, firstUnansweredIndex };
 }
 
@@ -147,6 +152,38 @@ router.post('/start', protect, async (req, res) => {
         topic: q.topicId,
       })),
     });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+// @PUT /api/sessions/:id/pause  — saves progress, keeps status: 'active' so it can be resumed
+router.put('/:id/pause', protect, async (req, res) => {
+  try {
+    const { duration, lastResumeIndex } = req.body;
+
+    const session = await Session.findOne({ _id: req.params.id, userId: req.user._id });
+    if (!session) return res.status(404).json({ success: false, message: 'Session not found' });
+
+    // Only allow pausing active sessions
+    if (session.status !== 'active') {
+      return res.status(400).json({ success: false, message: 'Only active sessions can be paused' });
+    }
+
+    const updateData = {
+      duration: (session.duration || 0) + (duration || 0), // accumulate time across pauses
+    };
+    if (typeof lastResumeIndex === 'number') {
+      updateData.lastResumeIndex = lastResumeIndex;
+    }
+
+    const updatedSession = await Session.findByIdAndUpdate(
+      session._id,
+      updateData,
+      { new: true }
+    );
+
+    res.json({ success: true, session: updatedSession });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
