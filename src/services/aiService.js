@@ -274,6 +274,7 @@ const transcribeAudio = async (audioBuffer, mimeType = 'audio/m4a') => {
     const response = await openai.audio.transcriptions.create({
       file: await toFile(audioBuffer, 'recording.m4a'),
       model: 'whisper-1',
+      language: 'en',  // Strictly enforce English — prevents Marathi/Hindi transcription
     });
     return response.text;
   } catch (error) {
