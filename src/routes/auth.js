@@ -135,8 +135,13 @@ router.post('/forgot-password', async (req, res) => {
 
     res.json({ success: true, message: 'OTP sent to your email address.' });
   } catch (error) {
-    console.error('Forgot password error:', error.message);
-    res.status(500).json({ success: false, message: 'Failed to send OTP. Please try again.' });
+    console.error('Forgot password error:', error);
+    // Surface a more actionable message for common SMTP auth failures
+    const isAuthError = error.code === 'EAUTH' || error.responseCode === 535;
+    const clientMsg = isAuthError
+      ? 'Email service authentication failed. Please contact support.'
+      : 'Failed to send OTP. Please try again.';
+    res.status(500).json({ success: false, message: clientMsg });
   }
 });
 
