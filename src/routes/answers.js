@@ -139,6 +139,59 @@ router.post('/submit', protect, async (req, res) => {
   }
 });
 
+// @POST /api/answers/reanswer — clear previous answer for re-answering
+router.post('/reanswer', protect, async (req, res) => {
+  try {
+    const { questionId, sessionId } = req.body;
+
+    if (!questionId || !sessionId) {
+      return res.status(400).json({ success: false, message: 'questionId and sessionId are required' });
+    }
+
+    // Find the session
+    const session = await Session.findOne({ _id: sessionId, userId: req.user._id });
+    if (!session) return res.status(404).json({ success: false, message: 'Session not found' });
+
+    // Find and delete the answer for this question and session
+    const answer = await Answer.findOne({ questionId, sessionId, userId: req.user._id });
+    if (answer) {
+      const score = answer.score;
+      // Delete the answer
+      await Answer.deleteOne({ _id: answer._id });
+
+      // Update session: pull from answers list, reduce questionsAnswered, subtract from totalScore, update averageScore
+      const updatedAnswers = session.answers.filter(id => id.toString() !== answer._id.toString());
+      const newQuestionsAnswered = Math.max(0, session.questionsAnswered - 1);
+      const newTotalScore = Math.max(0, session.totalScore - score);
+      const newAverageScore = newQuestionsAnswered > 0 ? parseFloat((newTotalScore / newQuestionsAnswered).toFixed(2)) : 0;
+
+      await Session.findByIdAndUpdate(sessionId, {
+        answers: updatedAnswers,
+        questionsAnswered: newQuestionsAnswered,
+        totalScore: newTotalScore,
+        averageScore: newAverageScore
+      });
+
+      // Also adjust the Question's stats
+      const question = await Question.findById(questionId);
+      if (question && question.timesAnswered > 0) {
+        const newTimes = Math.max(0, question.timesAnswered - 1);
+        const newAvg = newTimes > 0 ? parseFloat(((question.averageScore * question.timesAnswered - score) / newTimes).toFixed(2)) : 0;
+        await Question.findByIdAndUpdate(questionId, {
+          timesAnswered: newTimes,
+          averageScore: newAvg
+        });
+      }
+    }
+
+    res.json({ success: true, message: 'Previous answer cleared, ready to re-answer.' });
+  } catch (error) {
+    console.error('Re-answer error:', error);
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+
 // @GET /api/answers/history
 router.get('/history', protect, async (req, res) => {
   try {

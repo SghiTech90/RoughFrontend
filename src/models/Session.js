@@ -13,7 +13,7 @@ const sessionSchema = new mongoose.Schema(
     },
     mode: {
       type: String,
-      enum: ['revision', 'interview', 'weak_topics', 'spaced_repetition'],
+      enum: ['revision', 'interview', 'weak_topics', 'spaced_repetition', 'weak_questions'],
       default: 'revision',
     },
     questionsAnswered: {

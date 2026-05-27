@@ -108,6 +108,15 @@ router.post('/start', protect, async (req, res) => {
       })
         .limit(questionCount)
         .populate('topicId', 'title category');
+    } else if (mode === 'weak_questions') {
+      questions = await Question.find({
+        topicId,
+        userId: req.user._id,
+        timesAnswered: { $gt: 0 },
+        averageScore: { $lte: 7 },
+      })
+        .limit(questionCount)
+        .populate('topicId', 'title category');
     } else if (topicId) {
       questions = await Question.find({
         topicId,
@@ -182,6 +191,40 @@ router.put('/:id/pause', protect, async (req, res) => {
       updateData,
       { new: true }
     );
+
+    res.json({ success: true, session: updatedSession });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+// @PUT /api/sessions/:id/skip — shift skipped question to the end of the queue
+router.put('/:id/skip', protect, async (req, res) => {
+  try {
+    const { questionId } = req.body;
+    if (!questionId) {
+      return res.status(400).json({ success: false, message: 'questionId is required' });
+    }
+
+    const session = await Session.findOne({ _id: req.params.id, userId: req.user._id });
+    if (!session) return res.status(404).json({ success: false, message: 'Session not found' });
+
+    // Find the question in the session's questions array
+    const qIndex = session.questions.findIndex(id => id.toString() === questionId.toString());
+    if (qIndex === -1) {
+      return res.status(400).json({ success: false, message: 'Question not found in this session' });
+    }
+
+    // Move it to the end of the questions array
+    const questionsList = [...session.questions];
+    const [skippedQ] = questionsList.splice(qIndex, 1);
+    questionsList.push(skippedQ);
+
+    const updatedSession = await Session.findByIdAndUpdate(
+      session._id,
+      { questions: questionsList },
+      { new: true }
+    ).populate('questions', 'questionText type difficulty expectedConcepts topicId');
 
     res.json({ success: true, session: updatedSession });
   } catch (error) {
