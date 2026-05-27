@@ -22,6 +22,41 @@ router.post('/submit', protect, async (req, res) => {
 
     const topic = question.topicId;
 
+    // Check and clean up existing answer to maintain "only one answer per question in a session"
+    if (sessionId) {
+      const existingAnswer = await Answer.findOne({ questionId, sessionId, userId: req.user._id });
+      if (existingAnswer) {
+        const oldScore = existingAnswer.score;
+        await Answer.deleteOne({ _id: existingAnswer._id });
+        
+        // Adjust the session stats: pull old answer ID, subtract score, reduce questionsAnswered
+        const session = await Session.findOne({ _id: sessionId, userId: req.user._id });
+        if (session) {
+          const updatedAnswers = session.answers.filter(id => id.toString() !== existingAnswer._id.toString());
+          const newQuestionsAnswered = Math.max(0, session.questionsAnswered - 1);
+          const newTotalScore = Math.max(0, session.totalScore - oldScore);
+          const newAverageScore = newQuestionsAnswered > 0 ? parseFloat((newTotalScore / newQuestionsAnswered).toFixed(2)) : 0;
+          
+          await Session.findByIdAndUpdate(sessionId, {
+            answers: updatedAnswers,
+            questionsAnswered: newQuestionsAnswered,
+            totalScore: newTotalScore,
+            averageScore: newAverageScore
+          });
+        }
+        
+        // Adjust the question stats: reduce timesAnswered, adjust averageScore
+        if (question.timesAnswered > 0) {
+          const newTimes = Math.max(0, question.timesAnswered - 1);
+          const newAvg = newTimes > 0 ? parseFloat(((question.averageScore * question.timesAnswered - oldScore) / newTimes).toFixed(2)) : 0;
+          
+          question.timesAnswered = newTimes;
+          question.averageScore = newAvg;
+          await question.save();
+        }
+      }
+    }
+
     // AI Evaluation — pass notes for richer context
     const evaluation = await evaluateAnswer(
       question.questionText,
