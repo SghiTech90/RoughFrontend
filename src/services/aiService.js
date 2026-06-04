@@ -95,6 +95,113 @@ Rules:
   }
 };
 
+const COVERAGE_STATUSES = ['covered', 'partial', 'missing', 'contradicted'];
+
+/**
+ * Normalize raw AI evaluation JSON into a consistent shape for API/DB.
+ */
+const normalizeEvaluation = (raw) => {
+  if (!raw || typeof raw !== 'object') {
+    return { score: 0, overallFeedback: 'Failed to evaluate answer. Please try again.' };
+  }
+
+  const incorrectStatements = [];
+  const seen = new Set();
+
+  const pushStatement = (entry) => {
+    if (!entry || typeof entry !== 'object') return;
+    const whatYouSaid = String(entry.whatYouSaid || entry.claim || '').trim();
+    const issue = String(entry.issue || entry.whyWrong || '').trim();
+    const correction = String(entry.correction || entry.correct || '').trim();
+    if (!whatYouSaid && !issue && !correction) return;
+    const key = `${whatYouSaid}|${issue}|${correction}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    incorrectStatements.push({ whatYouSaid, issue, correction });
+  };
+
+  const statementSources = [
+    raw.incorrectStatements,
+    raw.incorrect_statements,
+    raw.wrongStatements,
+    raw.factualErrors,
+    raw.errors,
+  ];
+  statementSources.forEach((arr) => {
+    if (!Array.isArray(arr)) return;
+    arr.forEach((item) => {
+      if (typeof item === 'string') {
+        const text = String(item).trim();
+        if (text) pushStatement({ whatYouSaid: text, issue: '', correction: '' });
+      } else {
+        pushStatement(item);
+      }
+    });
+  });
+
+  const incorrectConcepts = [];
+  const legacyIncorrect = raw.incorrectConcepts || raw.incorrectPoints || raw.wrongPoints || [];
+  if (Array.isArray(legacyIncorrect)) {
+    legacyIncorrect.forEach((item) => {
+      const text = String(item || '').trim();
+      if (!text) return;
+      incorrectConcepts.push(text);
+      pushStatement({ whatYouSaid: text, issue: '', correction: '' });
+    });
+  }
+
+  const conceptCoverage = [];
+  if (Array.isArray(raw.conceptCoverage)) {
+    raw.conceptCoverage.forEach((row) => {
+      const concept = String(row?.concept || row?.name || '').trim();
+      const status = String(row?.status || row?.state || '').toLowerCase();
+      if (!concept || !COVERAGE_STATUSES.includes(status)) return;
+      conceptCoverage.push({ concept, status });
+    });
+  }
+
+  conceptCoverage
+    .filter((row) => row.status === 'contradicted')
+    .forEach((row) => {
+      pushStatement({
+        whatYouSaid: `Your explanation of "${row.concept}"`,
+        issue: 'This core concept was contradicted or stated incorrectly in your answer.',
+        correction: `Review the correct understanding of: ${row.concept}`,
+      });
+    });
+
+  const derivedIncorrectConcepts =
+    incorrectConcepts.length > 0
+      ? incorrectConcepts.slice(0, 3)
+      : incorrectStatements.slice(0, 3).map((s) => {
+          const parts = [];
+          if (s.whatYouSaid) parts.push(`You said: "${s.whatYouSaid}"`);
+          if (s.issue) parts.push(s.issue);
+          if (s.correction) parts.push(`Correct: ${s.correction}`);
+          return parts.join(' — ');
+        });
+
+  const rawScore = Number(raw.score);
+  const score = Number.isFinite(rawScore)
+    ? Math.min(10, Math.max(0, Math.round(rawScore)))
+    : 5;
+
+  return {
+    score,
+    correctPoints: (raw.correctPoints || []).slice(0, 3).map(String),
+    missingConcepts: (raw.missingConcepts || []).slice(0, 3).map(String),
+    incorrectConcepts: derivedIncorrectConcepts,
+    incorrectStatements: incorrectStatements.slice(0, 3),
+    suggestions: (raw.suggestions || []).slice(0, 3).map(String),
+    overallFeedback: String(raw.overallFeedback || ''),
+    interviewFeedback: String(raw.interviewFeedback || ''),
+    correctExplanation: String(raw.correctExplanation || ''),
+    keyPoints: (raw.keyPoints || []).slice(0, 3).map(String),
+    followUpQuestion: String(raw.followUpQuestion || ''),
+    conceptCoverage: conceptCoverage.slice(0, 8),
+  };
+};
+
 /**
  * Evaluate a user's answer against expected concepts (Interview Mode)
  * @param {string} questionText - The question asked
@@ -130,53 +237,75 @@ Context: ${difficultyContext}
 
 IMPORTANT INSTRUCTIONS:
 - Even if notes are limited, evaluate based on your knowledge of the topic.
-- A concise, correct answer that covers the main concepts deserves a 7–9 score.
-- Only flag something as "missing" if it is CORE to a correct answer.
-- MAXIMUM 3 items in missingConcepts. Pick only the most important ones.
-- MAXIMUM 3 items in keyPoints (the 3 most important things to remember).
+- Actively scan the user's answer for factual errors, misconceptions, oversimplifications, and misleading claims.
+- missingConcepts = important ideas they did NOT mention (omissions). Never put omissions in incorrectStatements.
+- incorrectStatements = things they SAID that are wrong or misleading (commissions). REQUIRED field — use [] ONLY when every claim in their answer is accurate.
+- If score is 6 or below, incorrectStatements MUST have at least 1 entry (factual error, misconception, or oversimplification).
+- Common misconceptions and oversimplifications count as incorrectStatements even when the rest of the answer is partly right.
+- Do NOT duplicate the same point in missingConcepts and incorrectStatements.
+- suggestions = how to structure or improve the next answer (study tips, depth, examples) — not a repeat of missing/wrong lists.
+- MAXIMUM 3 items in missingConcepts, incorrectStatements, correctPoints, suggestions, and keyPoints.
 - correctExplanation should be a clear, ideal explanation of the correct answer (2-4 sentences).
 - followUpQuestion should be a single natural follow-up question to deepen learning.
-- interviewFeedback is a short interviewer-style comment (1-2 sentences).
-- If the candidate's answer is correct and covers the key idea, score it 7 or above.
+- interviewFeedback: only for hard/interview-level questions; otherwise use an empty string "".
+- conceptCoverage: one entry per core concept listed above with status "covered" | "partial" | "missing" | "contradicted".
+- If they contradict a core concept, include it in incorrectStatements AND mark that concept "contradicted" in conceptCoverage.
+- Cap score at 6 if any core concept is contradicted or a major factual error is present, even if other parts are correct.
 
 Evaluate and return ONLY this exact JSON structure, no other text:
 {
   "score": <number 1-10>,
-  "correctPoints": ["specific thing they said correctly", "another correct point"],
-  "missingConcepts": ["most important missing concept (max 3 total)"],
-  "incorrectConcepts": ["only if they said something factually wrong"],
-  "suggestions": ["short actionable improvement tip (max 3 total)"],
+  "correctPoints": ["specific thing they said correctly"],
+  "incorrectStatements": [
+    {
+      "whatYouSaid": "quote or paraphrase from their answer",
+      "issue": "why this is wrong or misleading",
+      "correction": "the accurate version"
+    }
+  ],
+  "missingConcepts": ["core idea they omitted (max 3)"],
+  "suggestions": ["actionable improvement for next time (max 3)"],
   "overallFeedback": "1-2 sentence honest tutor feedback",
-  "interviewFeedback": "1 sentence — would you move this candidate forward?",
+  "interviewFeedback": "1 sentence interviewer verdict, or \"\" if not interview-level",
   "correctExplanation": "The ideal 2-4 sentence explanation of the correct answer",
-  "keyPoints": ["Key point 1 to remember", "Key point 2 to remember", "Key point 3 to remember"],
-  "followUpQuestion": "A natural follow-up question to deepen learning"
+  "keyPoints": ["Key point 1", "Key point 2", "Key point 3"],
+  "followUpQuestion": "A natural follow-up question to deepen learning",
+  "conceptCoverage": [
+    { "concept": "exact concept from the list above", "status": "covered" | "partial" | "missing" | "contradicted" }
+  ]
 }
 
 Scoring guide:
-- 9-10: Strong, confident answer — covers all key ideas clearly
-- 7-8: Good answer — covers main concepts, minor gaps acceptable
-- 5-6: Partial — got the basics but missed important core ideas
-- 3-4: Weak — shows some awareness but significant gaps
-- 1-2: Incorrect or very minimal understanding`;
+- 9-10: Strong, confident answer — covers all key ideas clearly, no wrong claims
+- 7-8: Good answer — covers main concepts, minor gaps acceptable, no major errors
+- 5-6: Partial — got some ideas but missed important core ideas or has minor errors
+- 3-4: Weak — significant gaps or multiple wrong/misleading statements
+- 1-2: Mostly incorrect or very minimal understanding`;
 
   try {
     const response = await createChatCompletionWithRetry({
       model: 'gpt-5-mini',
-      messages: [{ role: 'user', content: prompt }],
+      messages: [
+        {
+          role: 'system',
+          content:
+            'You evaluate student answers strictly. Always populate incorrectStatements when the student states anything factually wrong, misleading, or a common misconception. Never leave incorrectStatements empty if the score is 6 or below unless every claim they made is accurate.',
+        },
+        { role: 'user', content: prompt },
+      ],
       response_format: { type: 'json_object' },
     });
 
     const content = response.choices[0]?.message?.content;
     if (!content) {
       console.error('AI returned empty content in evaluateAnswer');
-      return { score: 0, overallFeedback: 'Failed to evaluate answer. Please try again.' };
+      return normalizeEvaluation({ score: 0, overallFeedback: 'Failed to evaluate answer. Please try again.' });
     }
 
-    return JSON.parse(content);
+    return normalizeEvaluation(JSON.parse(content));
   } catch (err) {
     console.error('❌ Answer Evaluation Error:', err.message);
-    return { score: 5, overallFeedback: 'Partially analyzed. Technical connection issue.' };
+    return normalizeEvaluation({ score: 5, overallFeedback: 'Partially analyzed. Technical connection issue.' });
   }
 };
 
@@ -286,6 +415,7 @@ const transcribeAudio = async (audioBuffer, mimeType = 'audio/m4a') => {
 module.exports = {
   generateQuestions,
   evaluateAnswer,
+  normalizeEvaluation,
   generateInsights,
   analyzeNotes,
   transcribeAudio,

@@ -363,7 +363,7 @@ router.get('/:id', protect, async (req, res) => {
       .populate('questions', 'questionText type difficulty expectedConcepts topicId')
       .populate({
         path: 'answers',
-        populate: { path: 'questionId', select: 'questionText difficulty type' },
+        populate: { path: 'questionId', select: 'questionText difficulty type expectedConcepts' },
       });
 
     if (!session) return res.status(404).json({ success: false, message: 'Session not found' });

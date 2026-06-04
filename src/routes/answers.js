@@ -42,13 +42,15 @@ router.post('/submit', protect, async (req, res) => {
       score: evaluation.score,
       feedback: {
         correctPoints: evaluation.correctPoints || [],
-        missingConcepts: (evaluation.missingConcepts || []).slice(0, 3),
+        missingConcepts: evaluation.missingConcepts || [],
         incorrectConcepts: evaluation.incorrectConcepts || [],
-        suggestions: (evaluation.suggestions || []).slice(0, 3),
+        incorrectStatements: evaluation.incorrectStatements || [],
+        conceptCoverage: evaluation.conceptCoverage || [],
+        suggestions: evaluation.suggestions || [],
         overallFeedback: evaluation.overallFeedback || '',
         interviewFeedback: evaluation.interviewFeedback || '',
         correctExplanation: evaluation.correctExplanation || '',
-        keyPoints: (evaluation.keyPoints || []).slice(0, 3),
+        keyPoints: evaluation.keyPoints || [],
         followUpQuestion: evaluation.followUpQuestion || '',
       },
       duration,
@@ -123,13 +125,15 @@ router.post('/submit', protect, async (req, res) => {
       evaluation: {
         score: evaluation.score,
         correctPoints: evaluation.correctPoints || [],
-        missingConcepts: (evaluation.missingConcepts || []).slice(0, 3),
+        missingConcepts: evaluation.missingConcepts || [],
         incorrectConcepts: evaluation.incorrectConcepts || [],
-        suggestions: (evaluation.suggestions || []).slice(0, 3),
+        incorrectStatements: evaluation.incorrectStatements || [],
+        conceptCoverage: evaluation.conceptCoverage || [],
+        suggestions: evaluation.suggestions || [],
         overallFeedback: evaluation.overallFeedback || '',
         interviewFeedback: evaluation.interviewFeedback || '',
         correctExplanation: evaluation.correctExplanation || '',
-        keyPoints: (evaluation.keyPoints || []).slice(0, 3),
+        keyPoints: evaluation.keyPoints || [],
         followUpQuestion: evaluation.followUpQuestion || '',
       },
     });
@@ -200,7 +204,7 @@ router.get('/history', protect, async (req, res) => {
     if (topicId) filter.topicId = topicId;
 
     const answers = await Answer.find(filter)
-      .populate('questionId', 'questionText difficulty type')
+      .populate('questionId', 'questionText difficulty type expectedConcepts')
       .populate('topicId', 'title category color')
       .sort({ createdAt: -1 })
       .limit(parseInt(limit));
@@ -215,7 +219,7 @@ router.get('/history', protect, async (req, res) => {
 router.get('/saved', protect, async (req, res) => {
   try {
     const answers = await Answer.find({ userId: req.user._id, savedByUser: true })
-      .populate('questionId', 'questionText difficulty type difficultyLevel')
+      .populate('questionId', 'questionText difficulty type difficultyLevel expectedConcepts')
       .populate('topicId', 'title category color')
       .populate('sessionId', 'completedAt createdAt mode')
       .sort({ createdAt: -1 });

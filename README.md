@@ -131,10 +131,13 @@ When you add a topic with notes, the AI automatically generates **8 diverse ques
 ### Answer Evaluation (gpt-5-mini)
 After you speak your answer, the AI returns:
 - **Score** (1–10)
-- **Correct points** ✅
-- **Missing concepts** ❌
-- **Suggestions** 💡
-- **Overall feedback**
+- **What you got wrong** ⚠️ (quote, why it's wrong, correction)
+- **Missing concepts** ❌ (omissions — not the same as wrong)
+- **What you got right** ✅
+- **Suggestions** 💡 (how to improve your next answer)
+- **Concept coverage** (per expected concept: covered / partial / missing / contradicted)
+- **Correct explanation** and **key points**
+- **Follow-up question** and **overall feedback**
 
 ### Spaced Repetition
 Questions have a SM-2-inspired algorithm:

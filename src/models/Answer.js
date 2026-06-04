@@ -35,6 +35,18 @@ const answerSchema = new mongoose.Schema(
       correctPoints: [{ type: String }],
       missingConcepts: [{ type: String }],
       incorrectConcepts: [{ type: String }],
+      incorrectStatements: [{
+        whatYouSaid: { type: String, default: '' },
+        issue: { type: String, default: '' },
+        correction: { type: String, default: '' },
+      }],
+      conceptCoverage: [{
+        concept: { type: String },
+        status: {
+          type: String,
+          enum: ['covered', 'partial', 'missing', 'contradicted'],
+        },
+      }],
       suggestions: [{ type: String }],
       overallFeedback: { type: String },
       interviewFeedback: { type: String },
