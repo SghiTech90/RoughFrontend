@@ -6,62 +6,20 @@ const openai = new OpenAI({
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
-const EVAL_NOTES_MAX = 1200;
-const EVAL_TRANSCRIPT_MAX = 4000;
-const EVAL_CONCEPTS_MAX = 6;
-const FAST_EVAL_MODEL = 'gpt-4o-mini';
-const DEEP_EVAL_MODEL = 'gpt-5-mini';
-
-const isTimeoutError = (error) => {
-  const msg = String(error?.message || '').toLowerCase();
-  return (
-    error?.code === 'ECONNABORTED' ||
-    error?.type === 'request-timeout' ||
-    msg.includes('timeout') ||
-    msg.includes('timed out')
-  );
-};
-
-async function callChatCompletion(payload, { timeoutMs = 45000, label = 'chat' } = {}) {
-  const started = Date.now();
-  try {
-    const response = await openai.chat.completions.create(payload, { timeout: timeoutMs });
-    console.log(`[AI] ${label} OK ${Date.now() - started}ms model=${payload.model}`);
-    return response;
-  } catch (error) {
-    console.error(`[AI] ${label} FAIL ${Date.now() - started}ms model=${payload.model}: ${error.message}`);
-    throw error;
-  }
-}
-
-async function createChatCompletionWithRetry(payload, retries = 1, timeoutMs = 45000) {
+async function createChatCompletionWithRetry(payload, retries = 1) {
   let lastError;
   for (let attempt = 0; attempt <= retries; attempt++) {
     try {
-      return await callChatCompletion(payload, {
-        timeoutMs,
-        label: `chat attempt ${attempt + 1}`,
+      return await openai.chat.completions.create(payload, {
+        timeout: 45000,
       });
     } catch (error) {
       lastError = error;
-      if (attempt === retries || isTimeoutError(error)) break;
+      if (attempt === retries) break;
       await sleep(500 * (attempt + 1));
     }
   }
   throw lastError;
-}
-
-function truncateForEval(text, max, suffix = '...[truncated]') {
-  if (!text || text.length <= max) return text || '';
-  return `${text.substring(0, max)}${suffix}`;
-}
-
-function isDeepEvaluation({ sessionMode, questionType, difficulty }) {
-  return (
-    sessionMode === 'interview' ||
-    questionType === 'interview' ||
-    (difficulty === 'hard' && questionType === 'interview')
-  );
 }
 
 /**
@@ -244,171 +202,110 @@ const normalizeEvaluation = (raw) => {
   };
 };
 
-function buildEvaluationPrompt({
-  questionText,
-  userTranscript,
-  expectedConcepts,
-  topicTitle,
-  difficulty,
-  notes,
-  deep,
-}) {
-  const concepts = (expectedConcepts || []).slice(0, EVAL_CONCEPTS_MAX);
-  const conceptsBlock = concepts.length
-    ? concepts.map((c, i) => `${i + 1}. ${c}`).join('\n')
-    : '(none listed)';
+/**
+ * Evaluate a user's answer against expected concepts (Interview Mode)
+ * @param {string} questionText - The question asked
+ * @param {string} userTranscript - The candidate's spoken answer
+ * @param {string[]} expectedConcepts - Core concepts the question is about
+ * @param {string} topicTitle - Topic name (e.g., "HTML", "React")
+ * @param {string} difficulty - "easy" | "medium" | "hard"
+ */
+const evaluateAnswer = async (questionText, userTranscript, expectedConcepts, topicTitle, difficulty = 'medium', notes = '') => {
+  const difficultyContext = {
+    easy: 'This is a beginner-level question. Evaluate accordingly — do not expect advanced or optional details.',
+    medium: 'This is an intermediate-level question. Expect core concept coverage without requiring advanced edge cases.',
+    hard: 'This is an advanced question. Expect the candidate to cover the main concepts with some depth.',
+  }[difficulty] || '';
 
-  const notesBlock = truncateForEval(notes, EVAL_NOTES_MAX) || '(use your knowledge of the topic)';
-  const answerBlock = truncateForEval(userTranscript, EVAL_TRANSCRIPT_MAX);
-
-  const jsonShape = `{
-  "score": <number 1-10>,
-  "correctPoints": ["max 2 items"],
-  "incorrectStatements": [{ "whatYouSaid": "", "issue": "", "correction": "" }],
-  "missingConcepts": ["max 2 items"],
-  "suggestions": ["max 2 items"],
-  "overallFeedback": "1-2 sentences",
-  "interviewFeedback": ${deep ? '"1 sentence interviewer verdict"' : '""'},
-  "correctExplanation": "2-3 sentences",
-  "keyPoints": ["max 2 items"],
-  "followUpQuestion": "one question",
-  "conceptCoverage": [{ "concept": "from list", "status": "covered|partial|missing|contradicted" }]
-}`;
-
-  if (!deep) {
-    return `Evaluate this ${difficulty} revision answer. Be concise.
+  const prompt = `You are an expert computer science tutor.
 
 Topic: ${topicTitle}
-Notes (summary): ${notesBlock}
+
+User Notes:
+${notes || '(No notes provided — use your internal knowledge of the topic)'}
+
 Question: "${questionText}"
-Core concepts:
-${conceptsBlock}
-Answer: "${answerBlock}"
 
-Rules: score 1-10; missingConcepts = omissions; incorrectStatements = wrong claims (use [] only if fully accurate); max 2 items per list; cap score at 6 if a core concept is contradicted.
+Core Concepts the answer should cover:
+${expectedConcepts.map((c, i) => `${i + 1}. ${c}`).join('\n')}
 
-Return ONLY JSON:
-${jsonShape}`;
-  }
+User's Answer:
+"${userTranscript}"
 
-  return `You are an expert computer science tutor evaluating an interview-level answer.
-
-Topic: ${topicTitle}
-Notes: ${notesBlock}
-Question: "${questionText}"
-Core concepts:
-${conceptsBlock}
-Answer: "${answerBlock}"
 Difficulty: ${difficulty}
+Context: ${difficultyContext}
 
-Rules:
-- Scan for factual errors and misconceptions.
-- missingConcepts = omissions; incorrectStatements = wrong claims.
-- Max 3 items per list. interviewFeedback required.
-- conceptCoverage: one entry per core concept.
+IMPORTANT INSTRUCTIONS:
+- Even if notes are limited, evaluate based on your knowledge of the topic.
+- Actively scan the user's answer for factual errors, misconceptions, oversimplifications, and misleading claims.
+- missingConcepts = important ideas they did NOT mention (omissions). Never put omissions in incorrectStatements.
+- incorrectStatements = things they SAID that are wrong or misleading (commissions). REQUIRED field — use [] ONLY when every claim in their answer is accurate.
+- If score is 6 or below, incorrectStatements MUST have at least 1 entry (factual error, misconception, or oversimplification).
+- Common misconceptions and oversimplifications count as incorrectStatements even when the rest of the answer is partly right.
+- Do NOT duplicate the same point in missingConcepts and incorrectStatements.
+- suggestions = how to structure or improve the next answer (study tips, depth, examples) — not a repeat of missing/wrong lists.
+- MAXIMUM 3 items in missingConcepts, incorrectStatements, correctPoints, suggestions, and keyPoints.
+- correctExplanation should be a clear, ideal explanation of the correct answer (2-4 sentences).
+- followUpQuestion should be a single natural follow-up question to deepen learning.
+- interviewFeedback: only for hard/interview-level questions; otherwise use an empty string "".
+- conceptCoverage: one entry per core concept listed above with status "covered" | "partial" | "missing" | "contradicted".
+- If they contradict a core concept, include it in incorrectStatements AND mark that concept "contradicted" in conceptCoverage.
+- Cap score at 6 if any core concept is contradicted or a major factual error is present, even if other parts are correct.
 
-Return ONLY JSON:
-${jsonShape}`;
+Evaluate and return ONLY this exact JSON structure, no other text:
+{
+  "score": <number 1-10>,
+  "correctPoints": ["specific thing they said correctly"],
+  "incorrectStatements": [
+    {
+      "whatYouSaid": "quote or paraphrase from their answer",
+      "issue": "why this is wrong or misleading",
+      "correction": "the accurate version"
+    }
+  ],
+  "missingConcepts": ["core idea they omitted (max 3)"],
+  "suggestions": ["actionable improvement for next time (max 3)"],
+  "overallFeedback": "1-2 sentence honest tutor feedback",
+  "interviewFeedback": "1 sentence interviewer verdict, or \"\" if not interview-level",
+  "correctExplanation": "The ideal 2-4 sentence explanation of the correct answer",
+  "keyPoints": ["Key point 1", "Key point 2", "Key point 3"],
+  "followUpQuestion": "A natural follow-up question to deepen learning",
+  "conceptCoverage": [
+    { "concept": "exact concept from the list above", "status": "covered" | "partial" | "missing" | "contradicted" }
+  ]
 }
 
-async function runEvaluationCompletion({ model, prompt, deep, timeoutMs, label }) {
-  return callChatCompletion(
-    {
-      model,
+Scoring guide:
+- 9-10: Strong, confident answer — covers all key ideas clearly, no wrong claims
+- 7-8: Good answer — covers main concepts, minor gaps acceptable, no major errors
+- 5-6: Partial — got some ideas but missed important core ideas or has minor errors
+- 3-4: Weak — significant gaps or multiple wrong/misleading statements
+- 1-2: Mostly incorrect or very minimal understanding`;
+
+  try {
+    const response = await createChatCompletionWithRetry({
+      model: 'gpt-5-mini',
       messages: [
         {
           role: 'system',
-          content: deep
-            ? 'You evaluate student answers strictly. Populate incorrectStatements for any factual error. JSON only.'
-            : 'You evaluate revision answers quickly and fairly. Be concise. JSON only.',
+          content:
+            'You evaluate student answers strictly. Always populate incorrectStatements when the student states anything factually wrong, misleading, or a common misconception. Never leave incorrectStatements empty if the score is 6 or below unless every claim they made is accurate.',
         },
         { role: 'user', content: prompt },
       ],
       response_format: { type: 'json_object' },
-      max_completion_tokens: deep ? 1100 : 750,
-    },
-    { timeoutMs, label }
-  );
-}
-
-/**
- * Evaluate a user's answer against expected concepts.
- * Uses gpt-4o-mini for revision (fast); gpt-5-mini for interview/deep evaluation.
- */
-const evaluateAnswer = async (
-  questionText,
-  userTranscript,
-  expectedConcepts,
-  topicTitle,
-  difficulty = 'medium',
-  notes = '',
-  options = {}
-) => {
-  const evalStarted = Date.now();
-  const { sessionMode = 'revision', questionType = 'concept' } = options;
-  const deep = isDeepEvaluation({ sessionMode, questionType, difficulty });
-  const prompt = buildEvaluationPrompt({
-    questionText,
-    userTranscript,
-    expectedConcepts,
-    topicTitle,
-    difficulty,
-    notes,
-    deep,
-  });
-
-  const primaryModel = deep ? DEEP_EVAL_MODEL : FAST_EVAL_MODEL;
-  const primaryTimeout = deep ? 35000 : 25000;
-  const fallbackModel = FAST_EVAL_MODEL;
-  const fallbackTimeout = 20000;
-
-  const runAttempt = async (model, attemptPrompt, attemptDeep, timeoutMs, label) => {
-    const response = await runEvaluationCompletion({
-      model,
-      prompt: attemptPrompt,
-      deep: attemptDeep,
-      timeoutMs,
-      label,
     });
+
     const content = response.choices[0]?.message?.content;
-    if (!content) throw new Error('Empty AI response content');
-    console.log(`[AI] evaluateAnswer total ${Date.now() - evalStarted}ms model=${model} deep=${attemptDeep}`);
+    if (!content) {
+      console.error('AI returned empty content in evaluateAnswer');
+      return normalizeEvaluation({ score: 0, overallFeedback: 'Failed to evaluate answer. Please try again.' });
+    }
+
     return normalizeEvaluation(JSON.parse(content));
-  };
-
-  try {
-    return await runAttempt(primaryModel, prompt, deep, primaryTimeout, `evaluateAnswer primary (${primaryModel})`);
-  } catch (primaryErr) {
-    if (primaryModel === fallbackModel) {
-      console.error(`❌ Answer Evaluation Error after ${Date.now() - evalStarted}ms:`, primaryErr.message);
-      return normalizeEvaluation({ score: 5, overallFeedback: 'Partially analyzed. Technical connection issue.' });
-    }
-
-    console.warn(
-      `[AI] evaluateAnswer primary failed (${isTimeoutError(primaryErr) ? 'timeout' : primaryErr.message}) — trying ${fallbackModel}`
-    );
-
-    try {
-      const compactPrompt = buildEvaluationPrompt({
-        questionText,
-        userTranscript,
-        expectedConcepts,
-        topicTitle,
-        difficulty,
-        notes,
-        deep: false,
-      });
-      return await runAttempt(
-        fallbackModel,
-        compactPrompt,
-        false,
-        fallbackTimeout,
-        `evaluateAnswer fallback (${fallbackModel})`
-      );
-    } catch (fallbackErr) {
-      console.error(`❌ Answer Evaluation Error after ${Date.now() - evalStarted}ms:`, fallbackErr.message);
-      return normalizeEvaluation({ score: 5, overallFeedback: 'Partially analyzed. Technical connection issue.' });
-    }
+  } catch (err) {
+    console.error('❌ Answer Evaluation Error:', err.message);
+    return normalizeEvaluation({ score: 5, overallFeedback: 'Partially analyzed. Technical connection issue.' });
   }
 };
 
