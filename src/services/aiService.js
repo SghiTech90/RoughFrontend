@@ -212,9 +212,9 @@ const normalizeEvaluation = (raw) => {
  */
 const evaluateAnswer = async (questionText, userTranscript, expectedConcepts, topicTitle, difficulty = 'medium', notes = '') => {
   const difficultyContext = {
-    easy: 'This is a beginner-level question. Evaluate accordingly — do not expect advanced or optional details.',
-    medium: 'This is an intermediate-level question. Expect core concept coverage without requiring advanced edge cases.',
-    hard: 'This is an advanced question. Expect the candidate to cover the main concepts with some depth.',
+    easy: 'Beginner revision — reward correct core understanding. Ignore advanced details, grammar, and spoken filler.',
+    medium: 'Intermediate revision — focus on whether they grasp the main idea. Minor slips or one missing detail should not tank the score.',
+    hard: 'Advanced revision — expect solid depth, but still reward mostly-correct answers that miss an edge case.',
   }[difficulty] || '';
 
   const prompt = `You are an expert computer science tutor.
@@ -236,21 +236,22 @@ Difficulty: ${difficulty}
 Context: ${difficultyContext}
 
 IMPORTANT INSTRUCTIONS:
+- This is a supportive REVISION session, not a harsh job interview. Score fairly and encourage learning.
 - Even if notes are limited, evaluate based on your knowledge of the topic.
-- Actively scan the user's answer for factual errors, misconceptions, oversimplifications, and misleading claims.
+- Answers may be spoken aloud — ignore filler words, grammar, and incomplete sentences unless meaning is unclear.
+- Reward understanding: if they demonstrate the right mental model with a small mistake, score 7-8, not 4-5.
 - missingConcepts = important ideas they did NOT mention (omissions). Never put omissions in incorrectStatements.
-- incorrectStatements = things they SAID that are wrong or misleading (commissions). REQUIRED field — use [] ONLY when every claim in their answer is accurate.
-- If score is 6 or below, incorrectStatements MUST have at least 1 entry (factual error, misconception, or oversimplification).
-- Common misconceptions and oversimplifications count as incorrectStatements even when the rest of the answer is partly right.
+- incorrectStatements = clear factual errors or misleading claims they stated — NOT minor imprecision or slight oversimplification.
+- Use incorrectStatements sparingly. One small slip in an otherwise correct answer should still score 7+.
 - Do NOT duplicate the same point in missingConcepts and incorrectStatements.
-- suggestions = how to structure or improve the next answer (study tips, depth, examples) — not a repeat of missing/wrong lists.
+- suggestions = how to improve next time — not a repeat of missing/wrong lists.
 - MAXIMUM 3 items in missingConcepts, incorrectStatements, correctPoints, suggestions, and keyPoints.
 - correctExplanation should be a clear, ideal explanation of the correct answer (2-4 sentences).
 - followUpQuestion should be a single natural follow-up question to deepen learning.
 - interviewFeedback: only for hard/interview-level questions; otherwise use an empty string "".
 - conceptCoverage: one entry per core concept listed above with status "covered" | "partial" | "missing" | "contradicted".
-- If they contradict a core concept, include it in incorrectStatements AND mark that concept "contradicted" in conceptCoverage.
-- Cap score at 6 if any core concept is contradicted or a major factual error is present, even if other parts are correct.
+- Reserve "contradicted" for answers that get a core concept fundamentally wrong — not for partial or imprecise wording.
+- Only cap score at 5 or below when the answer is mostly wrong or contradicts multiple core ideas.
 
 Evaluate and return ONLY this exact JSON structure, no other text:
 {
@@ -275,12 +276,13 @@ Evaluate and return ONLY this exact JSON structure, no other text:
   ]
 }
 
-Scoring guide:
-- 9-10: Strong, confident answer — covers all key ideas clearly, no wrong claims
-- 7-8: Good answer — covers main concepts, minor gaps acceptable, no major errors
-- 5-6: Partial — got some ideas but missed important core ideas or has minor errors
-- 3-4: Weak — significant gaps or multiple wrong/misleading statements
-- 1-2: Mostly incorrect or very minimal understanding`;
+Scoring guide (revision mode — be fair, not punitive):
+- 9-10: Strong answer — covers key ideas clearly with no meaningful errors
+- 7-8: Good answer — correct main idea; may miss a secondary detail, have one small slip, or slight oversimplification
+- 6: Adequate — shows partial understanding; got the gist but missed an important core point
+- 4-5: Weak — significant gaps, wrong main idea, or multiple noticeable errors
+- 1-3: Mostly incorrect or barely addressed the question
+Examples: mostly right with one small factual slip → 7 or 8. Right concept but missing one expected point → 6 or 7. Wrong core idea → 4 or below.`;
 
   try {
     const response = await createChatCompletionWithRetry({
@@ -289,7 +291,7 @@ Scoring guide:
         {
           role: 'system',
           content:
-            'You evaluate student answers strictly. Always populate incorrectStatements when the student states anything factually wrong, misleading, or a common misconception. Never leave incorrectStatements empty if the score is 6 or below unless every claim they made is accurate.',
+            'You are a fair, encouraging revision tutor. Score generously when the student shows correct understanding. Reserve low scores (4-5) for answers that miss the main point or have serious errors. Minor mistakes in an otherwise good answer should score 7-8. Only list incorrectStatements for clear factual errors, not tiny imprecisions.',
         },
         { role: 'user', content: prompt },
       ],
