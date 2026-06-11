@@ -6,16 +6,49 @@ const openai = new OpenAI({
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
-async function createChatCompletionWithRetry(payload, retries = 1) {
+const EVAL_FAST_MODEL = process.env.EVAL_FAST_MODEL || 'gpt-4o-mini';
+const EVAL_DEEP_MODEL = process.env.EVAL_DEEP_MODEL || 'gpt-5-mini';
+const NOTES_CONTEXT_LIMIT = 1000;
+const TRANSCRIPT_LIMIT = 2500;
+
+const isTimeoutError = (error) => {
+  const msg = String(error?.message || '').toLowerCase();
+  return error?.code === 'ECONNABORTED' || msg.includes('timeout') || msg.includes('timed out');
+};
+
+const truncateText = (text, limit, suffix = '…') => {
+  const value = String(text || '');
+  if (value.length <= limit) return value;
+  return `${value.slice(0, limit - suffix.length)}${suffix}`;
+};
+
+async function createChatCompletionWithRetry(payload, options = {}) {
+  const {
+    retries = 1,
+    retryOnTimeout = true,
+    timeoutMs = 45000,
+    label = 'chat',
+  } = typeof options === 'number' ? { retries: options } : options;
+
   let lastError;
-  for (let attempt = 0; attempt <= retries; attempt++) {
+  const maxAttempts = retries + 1;
+
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    const attemptStart = Date.now();
     try {
-      return await openai.chat.completions.create(payload, {
-        timeout: 45000,
-      });
+      const response = await openai.chat.completions.create(payload, { timeout: timeoutMs });
+      const elapsed = Date.now() - attemptStart;
+      console.log(`[AI] ${label} attempt ${attempt + 1}/${maxAttempts} ok in ${elapsed}ms (model=${payload.model})`);
+      return response;
     } catch (error) {
       lastError = error;
+      const elapsed = Date.now() - attemptStart;
+      console.warn(
+        `[AI] ${label} attempt ${attempt + 1}/${maxAttempts} failed in ${elapsed}ms:`,
+        error.message
+      );
       if (attempt === retries) break;
+      if (!retryOnTimeout && isTimeoutError(error)) break;
       await sleep(500 * (attempt + 1));
     }
   }
@@ -202,109 +235,145 @@ const normalizeEvaluation = (raw) => {
   };
 };
 
-/**
- * Evaluate a user's answer against expected concepts (Interview Mode)
- * @param {string} questionText - The question asked
- * @param {string} userTranscript - The candidate's spoken answer
- * @param {string[]} expectedConcepts - Core concepts the question is about
- * @param {string} topicTitle - Topic name (e.g., "HTML", "React")
- * @param {string} difficulty - "easy" | "medium" | "hard"
- */
-const evaluateAnswer = async (questionText, userTranscript, expectedConcepts, topicTitle, difficulty = 'medium', notes = '') => {
+const buildEvaluationPrompt = ({
+  questionText,
+  userTranscript,
+  expectedConcepts,
+  topicTitle,
+  difficulty,
+  notes,
+  isDeepEval,
+}) => {
   const difficultyContext = {
-    easy: 'This is a beginner-level question. Evaluate accordingly — do not expect advanced or optional details.',
-    medium: 'This is an intermediate-level question. Expect core concept coverage without requiring advanced edge cases.',
-    hard: 'This is an advanced question. Expect the candidate to cover the main concepts with some depth.',
+    easy: 'Beginner-level — do not expect advanced details.',
+    medium: 'Intermediate — expect core concepts, not every edge case.',
+    hard: 'Advanced — expect solid depth on main concepts.',
   }[difficulty] || '';
 
-  const prompt = `You are an expert computer science tutor.
+  const concepts = (expectedConcepts || []).slice(0, 6);
+  const notesSnippet = truncateText(notes, NOTES_CONTEXT_LIMIT) || '(Use your knowledge of the topic)';
+  const answerSnippet = truncateText(userTranscript, TRANSCRIPT_LIMIT);
+
+  const jsonShape = `{
+  "score": <1-10>,
+  "correctPoints": ["max 3"],
+  "incorrectStatements": [{ "whatYouSaid": "", "issue": "", "correction": "" }],
+  "missingConcepts": ["max 3"],
+  "suggestions": ["max 3"],
+  "overallFeedback": "1-2 sentences",
+  "interviewFeedback": "${isDeepEval ? '1 sentence verdict' : '""'}",
+  "correctExplanation": "2-3 sentences",
+  "keyPoints": ["max 3"],
+  "followUpQuestion": "one question",
+  "conceptCoverage": [{ "concept": "from list", "status": "covered|partial|missing|contradicted" }]
+}`;
+
+  return `Evaluate this CS revision answer. Return ONLY valid JSON matching the schema.
 
 Topic: ${topicTitle}
-
-User Notes:
-${notes || '(No notes provided — use your internal knowledge of the topic)'}
-
+Notes (excerpt): ${notesSnippet}
 Question: "${questionText}"
+Core concepts: ${concepts.map((c, i) => `${i + 1}. ${c}`).join(' ')}
+Difficulty: ${difficulty}. ${difficultyContext}
+Answer: "${answerSnippet}"
 
-Core Concepts the answer should cover:
-${expectedConcepts.map((c, i) => `${i + 1}. ${c}`).join('\n')}
+Rules:
+- missingConcepts = omissions only; incorrectStatements = wrong/misleading claims only.
+- Max 3 items per array. Keep strings concise.
+- If score ≤ 6, include ≥1 incorrectStatements unless every claim is accurate.
+- Cap score at 6 if a core concept is contradicted.
+- conceptCoverage: one entry per core concept listed.
 
-User's Answer:
-"${userTranscript}"
+${jsonShape}`;
+};
 
-Difficulty: ${difficulty}
-Context: ${difficultyContext}
+/**
+ * Evaluate a user's answer against expected concepts.
+ */
+const evaluateAnswer = async (
+  questionText,
+  userTranscript,
+  expectedConcepts,
+  topicTitle,
+  difficulty = 'medium',
+  notes = '',
+  options = {}
+) => {
+  const { questionType = 'concept', difficultyLevel = null } = options;
+  const evalStart = Date.now();
 
-IMPORTANT INSTRUCTIONS:
-- Even if notes are limited, evaluate based on your knowledge of the topic.
-- Actively scan the user's answer for factual errors, misconceptions, oversimplifications, and misleading claims.
-- missingConcepts = important ideas they did NOT mention (omissions). Never put omissions in incorrectStatements.
-- incorrectStatements = things they SAID that are wrong or misleading (commissions). REQUIRED field — use [] ONLY when every claim in their answer is accurate.
-- If score is 6 or below, incorrectStatements MUST have at least 1 entry (factual error, misconception, or oversimplification).
-- Common misconceptions and oversimplifications count as incorrectStatements even when the rest of the answer is partly right.
-- Do NOT duplicate the same point in missingConcepts and incorrectStatements.
-- suggestions = how to structure or improve the next answer (study tips, depth, examples) — not a repeat of missing/wrong lists.
-- MAXIMUM 3 items in missingConcepts, incorrectStatements, correctPoints, suggestions, and keyPoints.
-- correctExplanation should be a clear, ideal explanation of the correct answer (2-4 sentences).
-- followUpQuestion should be a single natural follow-up question to deepen learning.
-- interviewFeedback: only for hard/interview-level questions; otherwise use an empty string "".
-- conceptCoverage: one entry per core concept listed above with status "covered" | "partial" | "missing" | "contradicted".
-- If they contradict a core concept, include it in incorrectStatements AND mark that concept "contradicted" in conceptCoverage.
-- Cap score at 6 if any core concept is contradicted or a major factual error is present, even if other parts are correct.
+  const isDeepEval =
+    difficulty === 'hard' ||
+    questionType === 'interview' ||
+    (typeof difficultyLevel === 'number' && difficultyLevel >= 5);
 
-Evaluate and return ONLY this exact JSON structure, no other text:
-{
-  "score": <number 1-10>,
-  "correctPoints": ["specific thing they said correctly"],
-  "incorrectStatements": [
-    {
-      "whatYouSaid": "quote or paraphrase from their answer",
-      "issue": "why this is wrong or misleading",
-      "correction": "the accurate version"
-    }
-  ],
-  "missingConcepts": ["core idea they omitted (max 3)"],
-  "suggestions": ["actionable improvement for next time (max 3)"],
-  "overallFeedback": "1-2 sentence honest tutor feedback",
-  "interviewFeedback": "1 sentence interviewer verdict, or \"\" if not interview-level",
-  "correctExplanation": "The ideal 2-4 sentence explanation of the correct answer",
-  "keyPoints": ["Key point 1", "Key point 2", "Key point 3"],
-  "followUpQuestion": "A natural follow-up question to deepen learning",
-  "conceptCoverage": [
-    { "concept": "exact concept from the list above", "status": "covered" | "partial" | "missing" | "contradicted" }
-  ]
-}
+  const model = isDeepEval ? EVAL_DEEP_MODEL : EVAL_FAST_MODEL;
+  const prompt = buildEvaluationPrompt({
+    questionText,
+    userTranscript,
+    expectedConcepts,
+    topicTitle,
+    difficulty,
+    notes,
+    isDeepEval,
+  });
 
-Scoring guide:
-- 9-10: Strong, confident answer — covers all key ideas clearly, no wrong claims
-- 7-8: Good answer — covers main concepts, minor gaps acceptable, no major errors
-- 5-6: Partial — got some ideas but missed important core ideas or has minor errors
-- 3-4: Weak — significant gaps or multiple wrong/misleading statements
-- 1-2: Mostly incorrect or very minimal understanding`;
+  const requestPayload = {
+    model,
+    messages: [
+      {
+        role: 'system',
+        content:
+          'You are a concise CS tutor. Return compact JSON only. Be strict on factual errors.',
+      },
+      { role: 'user', content: prompt },
+    ],
+    response_format: { type: 'json_object' },
+    max_tokens: isDeepEval ? 1400 : 900,
+  };
 
   try {
-    const response = await createChatCompletionWithRetry({
-      model: 'gpt-5-mini',
-      messages: [
-        {
-          role: 'system',
-          content:
-            'You evaluate student answers strictly. Always populate incorrectStatements when the student states anything factually wrong, misleading, or a common misconception. Never leave incorrectStatements empty if the score is 6 or below unless every claim they made is accurate.',
-        },
-        { role: 'user', content: prompt },
-      ],
-      response_format: { type: 'json_object' },
+    const response = await createChatCompletionWithRetry(requestPayload, {
+      retries: 0,
+      retryOnTimeout: false,
+      timeoutMs: isDeepEval ? 40000 : 25000,
+      label: `evaluateAnswer:${isDeepEval ? 'deep' : 'fast'}`,
     });
 
     const content = response.choices[0]?.message?.content;
     if (!content) {
-      console.error('AI returned empty content in evaluateAnswer');
+      console.error('[evaluateAnswer] empty AI content');
       return normalizeEvaluation({ score: 0, overallFeedback: 'Failed to evaluate answer. Please try again.' });
     }
 
-    return normalizeEvaluation(JSON.parse(content));
+    const result = normalizeEvaluation(JSON.parse(content));
+    console.log(
+      `[evaluateAnswer] done in ${Date.now() - evalStart}ms model=${model} deep=${isDeepEval} score=${result.score}`
+    );
+    return result;
   } catch (err) {
-    console.error('❌ Answer Evaluation Error:', err.message);
+    console.error(`[evaluateAnswer] failed in ${Date.now() - evalStart}ms:`, err.message);
+
+    // One fast fallback if the primary deep model stalls
+    if (isDeepEval && model !== EVAL_FAST_MODEL) {
+      try {
+        console.log('[evaluateAnswer] retrying with fast model fallback');
+        const fallbackStart = Date.now();
+        const fallback = await createChatCompletionWithRetry(
+          { ...requestPayload, model: EVAL_FAST_MODEL, max_tokens: 900 },
+          { retries: 0, retryOnTimeout: false, timeoutMs: 25000, label: 'evaluateAnswer:fallback' }
+        );
+        const content = fallback.choices[0]?.message?.content;
+        if (content) {
+          const result = normalizeEvaluation(JSON.parse(content));
+          console.log(`[evaluateAnswer] fallback ok in ${Date.now() - fallbackStart}ms score=${result.score}`);
+          return result;
+        }
+      } catch (fallbackErr) {
+        console.error('[evaluateAnswer] fallback failed:', fallbackErr.message);
+      }
+    }
+
     return normalizeEvaluation({ score: 5, overallFeedback: 'Partially analyzed. Technical connection issue.' });
   }
 };
