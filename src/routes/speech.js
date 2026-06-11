@@ -26,9 +26,7 @@ router.post('/transcribe', protect, upload.single('audio'), async (req, res) => 
       return res.status(400).json({ success: false, message: 'No audio file provided' });
     }
 
-    const transcribeStart = Date.now();
     const transcript = await transcribeAudio(req.file.buffer, req.file.mimetype);
-    console.log(`[POST /speech/transcribe] whisper ${Date.now() - transcribeStart}ms`);
 
     if (!transcript || transcript.trim() === '') {
       return res.status(400).json({ success: false, message: 'Could not transcribe audio. Please speak clearly and try again.' });

@@ -22,17 +22,15 @@ router.post('/submit', protect, async (req, res) => {
 
     const topic = question.topicId;
 
-    const evalStart = Date.now();
+    // AI Evaluation — pass notes for richer context
     const evaluation = await evaluateAnswer(
       question.questionText,
       transcript,
       question.expectedConcepts,
       topic.title,
       question.difficulty || 'medium',
-      topic.notes || '',
-      { questionType: question.type, difficultyLevel: question.difficultyLevel }
+      topic.notes || ''
     );
-    console.log(`[POST /answers/submit] evaluateAnswer ${Date.now() - evalStart}ms question=${questionId}`);
 
     // Create answer record
     const answer = await Answer.create({
