@@ -9,6 +9,7 @@ const { evaluateAnswer } = require('../services/aiService');
 
 // @POST /api/answers/submit
 router.post('/submit', protect, async (req, res) => {
+  const submitStarted = Date.now();
   try {
     const { questionId, sessionId, transcript, duration = 0 } = req.body;
 
@@ -16,21 +17,28 @@ router.post('/submit', protect, async (req, res) => {
       return res.status(400).json({ success: false, message: 'questionId and transcript are required' });
     }
 
-    // Fetch question and topic
     const question = await Question.findById(questionId).populate('topicId');
     if (!question) return res.status(404).json({ success: false, message: 'Question not found' });
 
     const topic = question.topicId;
 
-    // AI Evaluation — pass notes for richer context
+    let sessionMode = 'revision';
+    if (sessionId) {
+      const session = await Session.findById(sessionId).select('mode').lean();
+      if (session?.mode) sessionMode = session.mode;
+    }
+
+    const evalStarted = Date.now();
     const evaluation = await evaluateAnswer(
       question.questionText,
       transcript,
       question.expectedConcepts,
       topic.title,
       question.difficulty || 'medium',
-      topic.notes || ''
+      topic.notes || '',
+      { sessionMode, questionType: question.type || 'concept' }
     );
+    console.log(`[answers/submit] evaluateAnswer ${Date.now() - evalStarted}ms sessionMode=${sessionMode} type=${question.type}`);
 
     // Create answer record
     const answer = await Answer.create({
@@ -118,6 +126,8 @@ router.post('/submit', protect, async (req, res) => {
       .catch((err) => {
         console.error('Topic mastery update error:', err.message);
       });
+
+    console.log(`[answers/submit] total ${Date.now() - submitStarted}ms questionId=${questionId}`);
 
     res.json({
       success: true,
