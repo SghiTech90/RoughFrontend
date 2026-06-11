@@ -166,6 +166,37 @@ router.post('/start', protect, async (req, res) => {
   }
 });
 
+// @PUT /api/sessions/:id/study-notes — persist revision study notes (bullet points)
+router.put('/:id/study-notes', protect, async (req, res) => {
+  try {
+    const { studyNotes } = req.body;
+    if (!Array.isArray(studyNotes)) {
+      return res.status(400).json({ success: false, message: 'studyNotes must be an array' });
+    }
+
+    const sanitized = studyNotes
+      .filter((n) => n && typeof n.text === 'string' && n.text.trim())
+      .map((n) => ({
+        id: String(n.id || `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`),
+        text: n.text.trim(),
+        source: n.source === 'voice' ? 'voice' : 'typed',
+        createdAt: n.createdAt ? new Date(n.createdAt) : new Date(),
+      }));
+
+    const session = await Session.findOneAndUpdate(
+      { _id: req.params.id, userId: req.user._id },
+      { studyNotes: sanitized },
+      { new: true }
+    );
+
+    if (!session) return res.status(404).json({ success: false, message: 'Session not found' });
+
+    res.json({ success: true, session, studyNotes: session.studyNotes });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
 // @PUT /api/sessions/:id/pause  — saves progress, keeps status: 'active' so it can be resumed
 router.put('/:id/pause', protect, async (req, res) => {
   try {

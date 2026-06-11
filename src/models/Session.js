@@ -65,6 +65,14 @@ const sessionSchema = new mongoose.Schema(
       type: Number,
       default: 0,
     },
+    studyNotes: [
+      {
+        id: { type: String, required: true },
+        text: { type: String, required: true },
+        source: { type: String, enum: ['typed', 'voice'], default: 'typed' },
+        createdAt: { type: Date, default: Date.now },
+      },
+    ],
   },
   { timestamps: true, toJSON: { virtuals: true }, toObject: { virtuals: true } }
 );
