@@ -33,6 +33,14 @@ Revision AI/
 │       │   ├── HistoryScreen.js    ← Session history
 │       │   └── SettingsScreen.js   ← Preferences + Logout
 │       └── services/api.js     ← Axios API service
+├── web/                    ← React web app (Vite + Tailwind)
+│   ├── src/
+│   │   ├── pages/          ← All screens (Auth, Home, Topics, Revision, etc.)
+│   │   ├── components/     ← Layout, FeedbackDetails, Modal
+│   │   ├── context/        ← Auth + Toast
+│   │   ├── services/api.js ← Same API as mobile
+│   │   └── config/api.js   ← VITE_API_URL
+│   └── .env.example
 ```
 
 ---
@@ -85,6 +93,31 @@ npx expo start
 ```
 
 Scan the QR code with Expo Go on your phone. Make sure your phone and PC are on the **same WiFi network**.
+
+---
+
+### 3. Web App Setup (Laptop / Desktop)
+
+```bash
+cd web
+
+# Copy and configure API URL
+copy .env.example .env
+# → Set VITE_API_URL=http://localhost:5000/api (or your Railway URL)
+
+npm run dev
+```
+
+Open **http://localhost:5173** in your browser. The web app has full feature parity with mobile:
+
+- Login / Register / Forgot Password
+- Home dashboard with streak, stats, quick actions
+- Topics — create, search, delete, AI question generation
+- Topic detail — questions, history, custom questions, resume sessions
+- Revision — voice recording (mic) or typed answers, AI feedback
+- Analytics — mastery, weekly chart, AI insights, saved answers
+- History — paginated session list
+- Settings — daily goal, difficulty, logout
 
 ---
 
@@ -185,7 +218,7 @@ On-demand AI analysis of your learning patterns including strengths, areas to im
 - [ ] Semantic note search (vector embeddings)
 - [ ] Adaptive difficulty (auto-adjusts based on performance)
 - [ ] Multi-user support
-- [ ] Web version (Next.js)
+- [x] Web version (Vite + React)
 - [ ] Export reports as PDF
 
 

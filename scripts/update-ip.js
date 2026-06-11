@@ -28,17 +28,26 @@ function getPort() {
 
 const localIp = getLocalIp();
 const port = getPort();
-const configPath = path.join(__dirname, '..', 'mobile', 'src', 'config', 'api.js');
+const apiUrl = `http://${localIp}:${port}/api`;
+const mobileConfigPath = path.join(__dirname, '..', 'mobile', 'src', 'config', 'api.js');
+const webEnvPath = path.join(__dirname, '..', 'web', '.env');
 
-const content = `const API_BASE_URL = 'http://${localIp}:${port}/api';
+const mobileContent = `const API_BASE_URL = '${apiUrl}';
 // Automatically updated by scripts/update-ip.js
 
 export default API_BASE_URL;
 `;
 
+const webEnvContent = `VITE_API_URL=${apiUrl}
+`;
+
 try {
-  fs.writeFileSync(configPath, content);
-  console.log(`Successfully updated API_BASE_URL to: http://${localIp}:${port}/api`);
+  fs.writeFileSync(mobileConfigPath, mobileContent);
+  if (fs.existsSync(path.join(__dirname, '..', 'web'))) {
+    fs.writeFileSync(webEnvPath, webEnvContent);
+    console.log(`Updated web/.env VITE_API_URL to: ${apiUrl}`);
+  }
+  console.log(`Successfully updated API_BASE_URL to: ${apiUrl}`);
 } catch (error) {
   console.error('Error updating config file:', error);
   process.exit(1);

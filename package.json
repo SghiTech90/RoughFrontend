@@ -5,9 +5,11 @@
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
-    "dev": "npm run update-ip && concurrently \"npm run dev-backend\" \"npm run dev-mobile\"",
+    "dev": "npm run update-ip && concurrently \"npm run dev-backend\" \"npm run dev-mobile\" \"npm run dev-web\"",
     "dev-backend": "nodemon server.js",
     "dev-mobile": "cd mobile && npx expo start",
+    "dev-web": "cd web && npm run dev",
+    "build-web": "cd web && npm run build",
     "update-ip": "node scripts/update-ip.js",
     "seed": "node scripts/seed.js",
     "test-ai": "node scripts/test-openai.js",
