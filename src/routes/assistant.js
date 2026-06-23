@@ -1,23 +1,35 @@
 const express = require('express');
 const router = express.Router();
 const { protect } = require('../middleware/auth');
-const { planLifeEvent, buildContextSnapshot } = require('../services/assistantService');
+const { planLifeEvent, buildContextSnapshot, loadMemories } = require('../services/assistantService');
 
 // @POST /api/assistant/plan
 // Personal OS (Mira) sends voice transcript + local task context; returns spoken coaching + schedule patch.
 router.post('/plan', protect, async (req, res) => {
   try {
-    const { rawTranscript, localContext, parsed } = req.body;
+    const { rawTranscript, localContext, parsed, sessionId, voiceMode } = req.body;
 
     const result = await planLifeEvent(req.user, {
       rawTranscript,
       localContext: localContext || {},
       parsed,
+      sessionId: sessionId || null,
+      voiceMode: !!voiceMode,
     });
 
     res.json({ success: true, ...result });
   } catch (error) {
     console.error('Assistant plan error:', error);
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+// @GET /api/assistant/memory
+router.get('/memory', protect, async (req, res) => {
+  try {
+    const memories = await loadMemories(req.user._id, 30);
+    res.json({ success: true, memories });
+  } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
 });

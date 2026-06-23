@@ -1,5 +1,7 @@
 const OpenAI = require('openai');
 const Answer = require('../models/Answer');
+const MiraMemory = require('../models/MiraMemory');
+const MiraChatTurn = require('../models/MiraChatTurn');
 
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
@@ -115,43 +117,141 @@ function quickIntentFromTranscript(text) {
   return null;
 }
 
-function buildSystemPrompt(user, context) {
+function buildSystemPrompt(user, context, { memories = [], chatHistory = [], voiceMode = false } = {}) {
   const mira = { ...DEFAULT_MIRA, ...(user.mira || {}) };
-  return `You are Mira, ${user.name}'s personal discipline coach for DisciplineOS + Revision AI.
+  const memoryBlock = memories.length
+    ? `\nWHAT YOU REMEMBER ABOUT ${user.name}:\n${memories.map((m) => `- [${m.category}] ${m.content}`).join('\n')}`
+    : '';
+  const historyBlock = chatHistory.length
+    ? `\nRECENT CONVERSATION:\n${chatHistory.map((t) => `${t.role}: ${t.content}`).join('\n')}`
+    : '';
+
+  const voiceRules = voiceMode
+    ? `VOICE MODE (ChatGPT-style): Sound human and present. Use natural speech — contractions, brief pauses in text, occasional "look" or "listen". 2-5 sentences in message.spoken. Ask one follow-up when helpful. Set continueConversation: true unless user ends session.`
+    : `Keep message.spoken to max 3 sentences.`;
+
+  return `You are Mira — ${user.name}'s personal partner-coach integrated with DisciplineOS (tasks, app blocking) and Revision AI (study questions).
+
+IDENTITY: Warm but elite. Emotional intelligence + spiritual grounding + Cristiano Ronaldo discipline mindset:
+- Ronaldo energy: "Talent without hard work is nothing." Consistency beats motivation. Rest is strategic, not weakness.
+- Emotional: Validate feelings first ("I hear you"), then guide. Never shame, insult, or attack relationships.
+- Spiritual: Breath, meditation, purpose, gratitude. Suggest meditation when overwhelmed — not as escape, as reset.
+- Partner: Remember their life (people, struggles, wins). Reference memories naturally.
 
 GOALS:
-- Wake ${mira.wakeTime}, sleep by ${mira.sleepTime}
-- ${mira.questionsTarget} Revision AI questions by ${mira.questionsDeadline} daily
+- Wake ${mira.wakeTime}, sleep ${mira.sleepTime}
+- ${mira.questionsTarget} questions by ${mira.questionsDeadline}
 - ${mira.primaryGoal} (${context.primaryGoalDaysLeft} days left)
-- Coach mode: ${mira.coachMode}
 
-PERSONALITY: Direct, caring, Indian English. Never shame or insult relationships. Max 3 sentences in message.spoken.
+CURRENT STATE: ${JSON.stringify(context)}
+${memoryBlock}
+${historyBlock}
 
-PRIORITY (higher wins): health/emergency > morning study block > job prep > chores > social > entertainment
+${voiceRules}
 
-RULES:
-1. If questionsAnsweredBeforeDeadline < questionsTarget AND morning block not passed → protect study time
-2. If morning block missed → suggest evening catch-up before entertainment
-3. sick/stressed userMood → compassion_reset
-4. confidence < 0.7 in input → decision clarify with one question
-5. Output ONLY valid JSON with keys: decision, reasonCode, message (spoken, display, tone), schedulePatch (array), metrics, followUp (optional), choices (optional)
+WHEN USER CAN'T STUDY / FEELS LOW: compassion_reset — suggest 1 hour real rest, 10 min meditation, then one small win (10 questions). Create tasks for meditation/rest if appropriate.
 
-reasonCode one of: MORNING_BLOCK_SAFE, MORNING_BLOCK_AT_RISK, MORNING_BLOCK_MISSED, CHORE_DEADLINE_CONFLICT, JOB_PREP_PROTECTED, GOAL_ESCALATION, PATTERN_WARNING, COMPASSION_RESET, STREAK_CELEBRATION, LOW_CONFIDENCE, EMERGENCY_OVERRIDE, SLEEP_PROTECTION, DISTRACTION_BLOCKED
+WHEN USER SHARES LIFE UPDATES: store_memory action + acknowledge warmly + connect to goals.
 
-decision one of: allow, conditional_allow, deny, defer, clarify, celebrate, compassion_reset`;
+DEVICE ACTIONS — include in "actions" array when user asks:
+- create_task: { "type":"create_task", "name":"Wash clothes", "time":"20:00", "mandatory":false, "aiEnabled":true } — adds to Setup routine
+- store_memory: { "type":"store_memory", "category":"life|person|mood|goal", "content":"..." }
+- open_screen: { "type":"open_screen", "screen":"routine_setup"|"app_picker" } — app_picker for blocking apps
+- schedulePatch: still use for time blocks (add/move with taskId, label, start, end)
+
+Also output: decision, reasonCode, message{spoken,display,tone}, schedulePatch[], actions[], followUp?, continueConversation (bool), metrics{riskLevel}
+
+decision: allow|conditional_allow|deny|defer|clarify|celebrate|compassion_reset
+reasonCode: MORNING_BLOCK_SAFE|MORNING_BLOCK_AT_RISK|MORNING_BLOCK_MISSED|CHORE_DEADLINE_CONFLICT|JOB_PREP_PROTECTED|GOAL_ESCALATION|PATTERN_WARNING|COMPASSION_RESET|STREAK_CELEBRATION|LOW_CONFIDENCE|EMERGENCY_OVERRIDE|SLEEP_PROTECTION|DISTRACTION_BLOCKED
+
+Output ONLY valid JSON.`;
 }
 
-function validatePlannerResponse(raw, context) {
+async function loadMemories(userId, limit = 20) {
+  try {
+    return await MiraMemory.find({ userId }).sort({ createdAt: -1 }).limit(limit).lean();
+  } catch {
+    return [];
+  }
+}
+
+async function loadChatHistory(userId, sessionId, limit = 10) {
+  if (!sessionId) return [];
+  try {
+    const turns = await MiraChatTurn.find({ userId, sessionId })
+      .sort({ createdAt: -1 })
+      .limit(limit)
+      .lean();
+    return turns.reverse().map((t) => ({ role: t.role, content: t.content }));
+  } catch {
+    return [];
+  }
+}
+
+async function saveChatTurn(userId, sessionId, role, content, actions = null) {
+  if (!sessionId || !content) return;
+  try {
+    await MiraChatTurn.create({ userId, sessionId, role, content, actions });
+  } catch (err) {
+    console.error('saveChatTurn error:', err.message);
+  }
+}
+
+async function persistMemoryActions(userId, actions = []) {
+  for (const a of actions) {
+    if (a?.type !== 'store_memory' || !a.content) continue;
+    try {
+      await MiraMemory.create({
+        userId,
+        category: a.category || 'life',
+        content: String(a.content).slice(0, 500),
+        tags: Array.isArray(a.tags) ? a.tags : [],
+        source: 'voice',
+      });
+    } catch (err) {
+      console.error('persistMemory error:', err.message);
+    }
+  }
+}
+
+function actionsToSchedulePatch(actions = []) {
+  const patch = [];
+  for (const a of actions) {
+    if (a?.type === 'create_task' && a.name && a.time) {
+      patch.push({
+        action: 'add',
+        taskId: `mira_${Date.now()}_${patch.length}`,
+        label: a.name,
+        start: a.time,
+        isMandatory: !!a.mandatory,
+      });
+    }
+  }
+  return patch;
+}
+
+function validatePlannerResponse(raw, context, voiceMode = false) {
   const spoken = String(raw?.message?.spoken || '').trim();
   const sentences = spoken.split(/[.!?]+/).filter((s) => s.trim().length > 0);
+  const maxSentences = voiceMode ? 6 : 4;
+  const maxLen = voiceMode ? 800 : 500;
 
-  if (sentences.length > 4 || spoken.length > 500) {
-    return buildFallbackResponse(context, 'Let me keep this simple. Check your morning question count and do the next highest-priority task now.');
+  if (sentences.length > maxSentences || spoken.length > maxLen) {
+    if (voiceMode && spoken.length > 0) {
+      const trimmed = sentences.slice(0, 5).join('. ') + '.';
+      raw.message = { ...raw.message, spoken: trimmed, display: trimmed };
+    } else {
+      return buildFallbackResponse(context, 'Let me keep this simple. What do you need right now — rest, a task, or study?', voiceMode);
+    }
   }
 
   const lower = spoken.toLowerCase();
   if (SHAME_KEYWORDS.some((k) => lower.includes(k))) {
-    return buildFallbackResponse(context, `You're at ${context.questionsAnsweredBeforeDeadline} of ${context.questionsTarget} questions today. Focus on the next task that moves your job goal forward.`);
+    return buildFallbackResponse(
+      context,
+      `I hear you. You're at ${context.questionsAnsweredBeforeDeadline} of ${context.questionsTarget} today. One step at a time — what's the smallest win we can do next?`,
+      voiceMode
+    );
   }
 
   const atRisk =
@@ -161,9 +261,13 @@ function validatePlannerResponse(raw, context) {
   if (atRisk && raw?.decision === 'allow' && raw?.reasonCode === 'MORNING_BLOCK_SAFE') {
     return buildFallbackResponse(
       context,
-      `You're at ${context.questionsAnsweredBeforeDeadline} of ${context.questionsTarget} with ${context.questionsTarget - context.questionsAnsweredBeforeDeadline} to go before ${context.questionsDeadline}. Start Revision AI now.`
+      `You're at ${context.questionsAnsweredBeforeDeadline} of ${context.questionsTarget} before ${context.questionsDeadline}. Let's protect that block — then we can talk about everything else.`,
+      voiceMode
     );
   }
+
+  const actions = Array.isArray(raw.actions) ? raw.actions : [];
+  const schedulePatch = Array.isArray(raw.schedulePatch) ? raw.schedulePatch : [];
 
   return {
     decision: raw.decision || 'allow',
@@ -171,9 +275,11 @@ function validatePlannerResponse(raw, context) {
     message: {
       spoken: spoken || buildStatusLine(context),
       display: raw?.message?.display || spoken,
-      tone: raw?.message?.tone || 'firm',
+      tone: raw?.message?.tone || (voiceMode ? 'warm' : 'firm'),
     },
-    schedulePatch: Array.isArray(raw.schedulePatch) ? raw.schedulePatch : [],
+    schedulePatch,
+    actions,
+    continueConversation: voiceMode ? raw.continueConversation !== false : !!raw.continueConversation,
     metrics: {
       questionsToday: context.questionsAnsweredToday,
       questionsBeforeDeadline: context.questionsAnsweredBeforeDeadline,
@@ -197,12 +303,14 @@ function buildStatusLine(context) {
   return `Morning target missed. Schedule a catch-up block before any entertainment tonight.`;
 }
 
-function buildFallbackResponse(context, spoken) {
+function buildFallbackResponse(context, spoken, voiceMode = false) {
   return {
     decision: 'allow',
     reasonCode: context.morningBlockMet ? 'MORNING_BLOCK_SAFE' : 'MORNING_BLOCK_AT_RISK',
-    message: { spoken, display: spoken, tone: 'firm' },
+    message: { spoken, display: spoken, tone: voiceMode ? 'warm' : 'firm' },
     schedulePatch: [],
+    actions: [],
+    continueConversation: voiceMode,
     metrics: {
       questionsToday: context.questionsAnsweredToday,
       questionsBeforeDeadline: context.questionsAnsweredBeforeDeadline,
@@ -226,6 +334,7 @@ function buildLocalPlannerResponse(intent, context) {
         tone: context.morningBlockMet ? 'warm' : 'firm',
       },
       schedulePatch: [],
+      actions: [],
       metrics: {
         questionsToday: context.questionsAnsweredToday,
         questionsBeforeDeadline: context.questionsAnsweredBeforeDeadline,
@@ -237,28 +346,25 @@ function buildLocalPlannerResponse(intent, context) {
   return null;
 }
 
-async function planWithOpenAI(user, context, rawTranscript, parsed) {
+async function planWithOpenAI(user, context, rawTranscript, parsed, opts = {}) {
+  const { memories = [], chatHistory = [], voiceMode = false } = opts;
   const payload = {
-    life_event: {
-      type: 'life_event',
-      version: '1.0',
-      rawTranscript,
-      parsed,
-      source: 'voice',
-    },
+    life_event: { type: 'life_event', version: '2.0', rawTranscript, parsed, source: 'voice' },
     contextSnapshot: context,
+    voiceMode,
   };
 
   const response = await openai.chat.completions.create({
     model: process.env.MIRA_MODEL || 'gpt-4o-mini',
-    temperature: 0.4,
+    temperature: voiceMode ? 0.65 : 0.4,
     response_format: { type: 'json_object' },
     messages: [
-      { role: 'system', content: buildSystemPrompt(user, context) },
-      {
-        role: 'user',
-        content: `Analyze and respond with planner JSON only:\n${JSON.stringify(payload)}`,
-      },
+      { role: 'system', content: buildSystemPrompt(user, context, { memories, chatHistory, voiceMode }) },
+      ...chatHistory.slice(-6).map((t) => ({
+        role: t.role === 'assistant' ? 'assistant' : 'user',
+        content: t.content,
+      })),
+      { role: 'user', content: `Respond with planner JSON only:\n${JSON.stringify(payload)}` },
     ],
   });
 
@@ -287,26 +393,43 @@ intents: schedule_chore, schedule_social, schedule_study, schedule_work, report_
   return JSON.parse(content);
 }
 
-async function planLifeEvent(user, { rawTranscript, localContext = {}, parsed: clientParsed }) {
+async function planLifeEvent(user, {
+  rawTranscript,
+  localContext = {},
+  parsed: clientParsed,
+  sessionId = null,
+  voiceMode = false,
+}) {
   const context = await buildContextSnapshot(user, localContext);
   const transcript = String(rawTranscript || '').trim();
 
+  const [memories, chatHistory] = await Promise.all([
+    loadMemories(user._id, 20),
+    loadChatHistory(user._id, sessionId, 10),
+  ]);
+
   if (!transcript) {
-    return { success: true, planner: buildFallbackResponse(context, buildStatusLine(context)), contextSnapshot: context };
+    const greeting = voiceMode
+      ? `Hey ${user.name}. I'm here — tell me what's going on, or say what you need me to set up.`
+      : buildStatusLine(context);
+    return {
+      success: true,
+      planner: buildFallbackResponse(context, greeting, voiceMode),
+      contextSnapshot: context,
+    };
   }
 
   const quick = quickIntentFromTranscript(transcript);
-  if (quick && (quick.intent === 'ask_status')) {
+  if (!voiceMode && quick && quick.intent === 'ask_status') {
     return { success: true, planner: buildLocalPlannerResponse(quick, context), contextSnapshot: context, parsed: quick };
   }
 
-  // Pass-through intents handled on device (yes/snooze during task alarm)
-  if (quick && (quick.intent === 'report_completion' || quick.intent === 'snooze_task')) {
+  if (!voiceMode && quick && (quick.intent === 'report_completion' || quick.intent === 'snooze_task')) {
     return { success: true, planner: null, parsed: quick, contextSnapshot: context, deviceAction: quick.intent };
   }
 
   let parsed = clientParsed || quick;
-  if (!parsed || parsed.confidence < 0.6) {
+  if (!voiceMode && (!parsed || parsed.confidence < 0.6)) {
     try {
       parsed = await parseIntentWithOpenAI(transcript);
     } catch (err) {
@@ -315,20 +438,35 @@ async function planLifeEvent(user, { rawTranscript, localContext = {}, parsed: c
     }
   }
 
-  const local = buildLocalPlannerResponse(parsed, context);
-  if (local) {
-    return { success: true, planner: local, contextSnapshot: context, parsed };
+  if (!voiceMode) {
+    const local = buildLocalPlannerResponse(parsed, context);
+    if (local) {
+      return { success: true, planner: local, contextSnapshot: context, parsed };
+    }
   }
 
   try {
-    const rawPlanner = await planWithOpenAI(user, context, transcript, parsed);
-    const planner = validatePlannerResponse(rawPlanner, context);
-    return { success: true, planner, contextSnapshot: context, parsed };
+    await saveChatTurn(user._id, sessionId, 'user', transcript);
+    const rawPlanner = await planWithOpenAI(user, context, transcript, parsed, {
+      memories,
+      chatHistory,
+      voiceMode,
+    });
+    const planner = validatePlannerResponse(rawPlanner, context, voiceMode);
+    await persistMemoryActions(user._id, planner.actions);
+    await saveChatTurn(user._id, sessionId, 'assistant', planner.message.spoken, planner.actions);
+    return { success: true, planner, contextSnapshot: context, parsed, sessionId };
   } catch (err) {
     console.error('Planner error:', err.message);
     return {
       success: true,
-      planner: buildFallbackResponse(context, buildStatusLine(context)),
+      planner: buildFallbackResponse(
+        context,
+        voiceMode
+          ? "I'm having trouble connecting right now. Give me a second and try again."
+          : buildStatusLine(context),
+        voiceMode
+      ),
       contextSnapshot: context,
       parsed,
       fallback: true,
@@ -342,4 +480,5 @@ module.exports = {
   getMorningProgress,
   validatePlannerResponse,
   buildStatusLine,
+  loadMemories,
 };
