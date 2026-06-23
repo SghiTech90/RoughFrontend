@@ -73,6 +73,17 @@ const sessionSchema = new mongoose.Schema(
         createdAt: { type: Date, default: Date.now },
       },
     ],
+    revisionReport: {
+      generatedAt: { type: Date, default: null },
+      opening: { type: String, default: '' },
+      strengthsNote: { type: String, default: '' },
+      sections: [
+        {
+          title: { type: String },
+          body: { type: String },
+        },
+      ],
+    },
   },
   { timestamps: true, toJSON: { virtuals: true }, toObject: { virtuals: true } }
 );

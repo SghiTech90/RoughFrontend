@@ -397,6 +397,165 @@ const analyzeNotes = async (notes) => {
 };
 
 /**
+ * Generate a human-readable revision debrief after a completed session.
+ */
+const normalizeRevisionReport = (raw) => {
+  if (!raw || typeof raw !== 'object') {
+    return {
+      opening: 'Your session is complete. Review your question breakdown for details.',
+      strengthsNote: '',
+      sections: [],
+    };
+  }
+
+  const sections = Array.isArray(raw.sections)
+    ? raw.sections
+        .map((s) => ({
+          title: String(s?.title || '').trim(),
+          body: String(s?.body || '').trim(),
+        }))
+        .filter((s) => s.title && s.body)
+    : [];
+
+  return {
+    opening: String(raw.opening || raw.summary || '').trim(),
+    strengthsNote: String(raw.strengthsNote || raw.strengths || '').trim(),
+    sections,
+  };
+};
+
+const buildFallbackRevisionReport = (sessionData) => {
+  const { topicTitle, averageScore, answers = [] } = sessionData;
+  const weak = answers.filter((a) => (a.score || 0) < 8);
+
+  const gaps = [];
+  const wrong = [];
+  weak.forEach((a) => {
+    (a.feedback?.missingConcepts || []).forEach((m) => gaps.push(m));
+    (a.feedback?.incorrectStatements || []).forEach((s) => {
+      if (s?.correction) wrong.push(s.correction);
+      else if (s?.issue) wrong.push(s.issue);
+    });
+  });
+
+  const uniqueGaps = [...new Set(gaps)].slice(0, 5);
+  const uniqueWrong = [...new Set(wrong)].slice(0, 5);
+
+  const opening = averageScore >= 8
+    ? `Solid work on ${topicTitle || 'this topic'} — you averaged ${averageScore}/10. A few interview-critical gaps are worth a quick read before your next session.`
+    : `You finished revising ${topicTitle || 'this topic'} with an average of ${averageScore}/10. Focus on the points below before you revise again.`;
+
+  const sections = [];
+  if (uniqueWrong.length) {
+    sections.push({
+      title: 'What to correct',
+      body: uniqueWrong.map((w, i) => `${i + 1}. ${w}`).join('\n\n'),
+    });
+  }
+  if (uniqueGaps.length) {
+    sections.push({
+      title: 'Critical points to mention next time',
+      body: uniqueGaps.map((g, i) => `${i + 1}. ${g}`).join('\n\n'),
+    });
+  }
+  if (!sections.length) {
+    sections.push({
+      title: 'Before your next revision',
+      body: 'You answered strongly across the board. Keep your explanations concise in interviews — lead with the core idea, then add one concrete example.',
+    });
+  }
+
+  return normalizeRevisionReport({ opening, strengthsNote: '', sections });
+};
+
+const generateSessionRevisionReport = async (sessionData) => {
+  const {
+    topicTitle = 'this topic',
+    topicNotes = '',
+    averageScore = 0,
+    questionsAnswered = 0,
+    answers = [],
+  } = sessionData;
+
+  const answerSummaries = answers.map((a, i) => {
+    const q = a.questionText || 'Question';
+    const fb = a.feedback || {};
+    return [
+      `--- Answer ${i + 1} (score ${a.score}/10) ---`,
+      `Question: ${q}`,
+      `They said: "${(a.transcript || '').substring(0, 400)}"`,
+      fb.missingConcepts?.length ? `Missing: ${fb.missingConcepts.join('; ')}` : null,
+      fb.incorrectStatements?.length
+        ? `Errors: ${fb.incorrectStatements.map((s) => s.issue || s.whatYouSaid).filter(Boolean).join('; ')}`
+        : null,
+      fb.suggestions?.length ? `Suggestions: ${fb.suggestions.join('; ')}` : null,
+    ].filter(Boolean).join('\n');
+  }).join('\n\n');
+
+  const prompt = `You are a supportive interview coach writing a short revision debrief for a student.
+
+Topic: ${topicTitle}
+Session average score: ${averageScore}/10
+Questions answered: ${questionsAnswered}
+
+Topic notes (context only):
+${topicNotes || '(none)'}
+
+Per-question data:
+${answerSummaries || '(no answers)'}
+
+Write a HUMAN, conversational debrief — like a tutor talking to the student after practice.
+- The student already knows ~90% and revises quickly; they do NOT want textbook dumps.
+- Focus ONLY on interview-critical gaps: wrong ideas, misconceptions, and must-mention points they skipped.
+- Ignore questions they nailed (8+/10) unless one small fix is truly important.
+- Use full sentences and short paragraphs. NO markdown headers, NO bullet lists in the body text.
+- Sound natural: "You explained X well, but..." not robotic lists.
+- If they did great overall, say so honestly and give 1-2 refinement tips only.
+
+Return ONLY this JSON:
+{
+  "opening": "2-3 sentences summarizing the session in plain English",
+  "strengthsNote": "1-2 sentences on what they did well (or empty string if little to praise)",
+  "sections": [
+    {
+      "title": "What you got wrong",
+      "body": "Paragraph in plain English about factual errors or misunderstood concepts. If none, one sentence saying so."
+    },
+    {
+      "title": "Critical points you missed",
+      "body": "Paragraph about important ideas they should mention in an interview answer next time."
+    },
+    {
+      "title": "Read before your next revision",
+      "body": "Short actionable paragraph — what to skim or practice before the next session."
+    }
+  ]
+}`;
+
+  try {
+    const response = await createChatCompletionWithRetry({
+      model: 'gpt-5-mini',
+      messages: [
+        {
+          role: 'system',
+          content:
+            'You write warm, concise revision debriefs for interview prep. Plain English paragraphs only — never bullet lists in body text.',
+        },
+        { role: 'user', content: prompt },
+      ],
+      response_format: { type: 'json_object' },
+    });
+
+    const content = response.choices[0]?.message?.content;
+    if (!content) return buildFallbackRevisionReport(sessionData);
+    return normalizeRevisionReport(JSON.parse(content));
+  } catch (err) {
+    console.error('❌ Session Revision Report Error:', err.message);
+    return buildFallbackRevisionReport(sessionData);
+  }
+};
+
+/**
  * Transcribe audio using OpenAI Whisper
  */
 const transcribeAudio = async (audioBuffer, mimeType = 'audio/m4a') => {
@@ -421,4 +580,6 @@ module.exports = {
   generateInsights,
   analyzeNotes,
   transcribeAudio,
+  generateSessionRevisionReport,
+  buildFallbackRevisionReport,
 };

@@ -267,11 +267,34 @@ router.put('/:id/skip', protect, async (req, res) => {
 router.put('/:id/complete', protect, async (req, res) => {
   try {
     const { duration } = req.body;
+    const Answer = require('../models/Answer');
+    const { generateSessionRevisionReport } = require('../services/aiService');
 
-    const session = await Session.findOne({ _id: req.params.id, userId: req.user._id });
+    const session = await Session.findOne({ _id: req.params.id, userId: req.user._id })
+      .populate('topicId', 'title notes category');
     if (!session) return res.status(404).json({ success: false, message: 'Session not found' });
 
     const avgScore = session.questionsAnswered > 0 ? session.totalScore / session.questionsAnswered : 0;
+
+    const answers = await Answer.find({ sessionId: session._id, userId: req.user._id })
+      .populate('questionId', 'questionText expectedConcepts difficulty')
+      .sort({ createdAt: 1 });
+
+    let revisionReport = null;
+    if (answers.length > 0) {
+      revisionReport = await generateSessionRevisionReport({
+        topicTitle: session.topicId?.title || 'Mixed Topics',
+        topicNotes: session.topicId?.notes || '',
+        averageScore: parseFloat(avgScore.toFixed(2)),
+        questionsAnswered: session.questionsAnswered,
+        answers: answers.map((a) => ({
+          score: a.score,
+          transcript: a.transcript,
+          questionText: a.questionId?.questionText || '',
+          feedback: a.feedback,
+        })),
+      });
+    }
 
     const updatedSession = await Session.findByIdAndUpdate(
       session._id,
@@ -280,28 +303,34 @@ router.put('/:id/complete', protect, async (req, res) => {
         completedAt: new Date(),
         duration: duration || 0,
         averageScore: parseFloat(avgScore.toFixed(2)),
+        ...(revisionReport
+          ? {
+              revisionReport: {
+                generatedAt: new Date(),
+                ...revisionReport,
+              },
+            }
+          : {}),
       },
       { new: true }
-    );
+    ).populate('topicId', 'title category color');
 
     // Update topic lastStudied and recalculate masteryLevel
     if (session.topicId) {
-      await Topic.findByIdAndUpdate(session.topicId, { lastStudied: new Date() });
+      await Topic.findByIdAndUpdate(session.topicId._id || session.topicId, { lastStudied: new Date() });
 
-      // Recalculate mastery from all answers for this topic to keep it in sync
-      const Answer = require('../models/Answer');
-      const topicAnswers = await Answer.find({ topicId: session.topicId, userId: req.user._id });
+      const topicAnswers = await Answer.find({ topicId: session.topicId._id || session.topicId, userId: req.user._id });
       if (topicAnswers.length > 0) {
         const topicAvg = topicAnswers.reduce((sum, a) => sum + a.score, 0) / topicAnswers.length;
         const masteryLevel = Math.round((topicAvg / 10) * 100);
-        await Topic.findByIdAndUpdate(session.topicId, { masteryLevel });
+        await Topic.findByIdAndUpdate(session.topicId._id || session.topicId, { masteryLevel });
       }
     }
 
     // Update user streak
     await updateStreak(req.user._id);
 
-    res.json({ success: true, session: updatedSession });
+    res.json({ success: true, session: updatedSession, revisionReport });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
