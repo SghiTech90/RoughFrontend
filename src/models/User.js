@@ -29,6 +29,15 @@ const userSchema = new mongoose.Schema(
       reminderTime: { type: String, default: '09:00' },
       difficulty: { type: String, enum: ['easy', 'medium', 'hard', 'mixed'], default: 'mixed' },
     },
+    mira: {
+      wakeTime: { type: String, default: '04:00' },
+      sleepTime: { type: String, default: '22:30' },
+      questionsTarget: { type: Number, default: 100 },
+      questionsDeadline: { type: String, default: '10:00' },
+      primaryGoal: { type: String, default: 'get_job_within_60_days' },
+      primaryGoalDeadline: { type: Date, default: null },
+      coachMode: { type: String, enum: ['strict_coach', 'gentle_coach'], default: 'strict_coach' },
+    },
     streak: {
       current: { type: Number, default: 0 },
       longest: { type: Number, default: 0 },

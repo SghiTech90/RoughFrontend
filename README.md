@@ -197,7 +197,11 @@ On-demand AI analysis of your learning patterns including strengths, areas to im
 | POST | `/api/answers/submit` | Submit voice answer for AI evaluation |
 | POST | `/api/speech/transcribe` | Whisper audio → text |
 | GET | `/api/dashboard` | Full analytics |
+| GET | `/api/dashboard/morning-progress` | Questions before daily cutoff (Personal OS / Mira) |
 | GET | `/api/dashboard/insights` | AI weekly insights |
+| POST | `/api/assistant/plan` | Mira life coach planner (Personal OS voice) |
+| GET | `/api/assistant/context` | Merged coach context + Revision AI progress |
+| PUT | `/api/assistant/preferences` | Mira goals (wake time, 100-by-10, job deadline) |
 
 ---
 

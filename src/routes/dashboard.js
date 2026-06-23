@@ -157,6 +157,65 @@ router.get('/', protect, async (req, res) => {
   }
 });
 
+/**
+ * Parse "HH:mm" into today's Date boundary (local server time).
+ */
+function parseTimeOnToday(timeStr) {
+  const [h, m] = timeStr.split(':').map(Number);
+  const d = new Date();
+  d.setHours(h, m, 0, 0);
+  return d;
+}
+
+// @GET /api/dashboard/morning-progress?deadline=10:00&target=100
+// Used by Personal OS (Mira) to verify questions completed before a daily cutoff.
+router.get('/morning-progress', protect, async (req, res) => {
+  try {
+    const userId = req.user._id;
+    const deadlineStr = String(req.query.deadline || '10:00');
+    const target = Math.max(1, parseInt(req.query.target, 10) || 100);
+
+    if (!/^\d{2}:\d{2}$/.test(deadlineStr)) {
+      return res.status(400).json({ success: false, message: 'deadline must be HH:mm (e.g. 10:00)' });
+    }
+
+    const windowStart = new Date();
+    windowStart.setHours(0, 0, 0, 0);
+
+    const windowEnd = parseTimeOnToday(deadlineStr);
+    const now = new Date();
+    const countEnd = now < windowEnd ? now : windowEnd;
+
+    const questionsAnswered = await Answer.countDocuments({
+      userId,
+      createdAt: { $gte: windowStart, $lte: countEnd },
+    });
+
+    const met = questionsAnswered >= target;
+    const remaining = Math.max(0, target - questionsAnswered);
+    const minutesLeftInWindow = now < windowEnd
+      ? Math.max(0, Math.floor((windowEnd - now) / 60000))
+      : 0;
+
+    res.json({
+      success: true,
+      window: {
+        from: windowStart.toISOString(),
+        to: windowEnd.toISOString(),
+        deadline: deadlineStr,
+      },
+      questionsAnswered,
+      target,
+      met,
+      remaining,
+      minutesLeftInWindow,
+      morningBlockPassed: now >= windowEnd,
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
 // @GET /api/dashboard/insights
 router.get('/insights', protect, async (req, res) => {
   try {

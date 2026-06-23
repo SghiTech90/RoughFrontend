@@ -16,6 +16,7 @@ const sessionRoutes = require('./src/routes/sessions');
 const answerRoutes = require('./src/routes/answers');
 const dashboardRoutes = require('./src/routes/dashboard');
 const speechRoutes = require('./src/routes/speech');
+const assistantRoutes = require('./src/routes/assistant');
 
 const app = express();
 
@@ -52,6 +53,7 @@ app.use('/api/sessions', sessionRoutes);
 app.use('/api/answers', answerRoutes);
 app.use('/api/dashboard', dashboardRoutes);
 app.use('/api/speech', speechRoutes);
+app.use('/api/assistant', assistantRoutes);
 
 // 404 Handler
 app.use((req, res) => {
