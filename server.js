@@ -17,6 +17,7 @@ const answerRoutes = require('./src/routes/answers');
 const dashboardRoutes = require('./src/routes/dashboard');
 const speechRoutes = require('./src/routes/speech');
 const assistantRoutes = require('./src/routes/assistant');
+const personalOsRoutes = require('./src/routes/personalos');
 
 const app = express();
 
@@ -54,6 +55,7 @@ app.use('/api/answers', answerRoutes);
 app.use('/api/dashboard', dashboardRoutes);
 app.use('/api/speech', speechRoutes);
 app.use('/api/assistant', assistantRoutes);
+app.use('/api/personalos', personalOsRoutes);
 
 // 404 Handler
 app.use((req, res) => {
