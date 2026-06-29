@@ -1,0 +1,12 @@
+{
+  "expo": {
+    "extra": {
+      "eas": {
+        "projectId": "3374c61e-4ab3-4233-856b-f981e2dd2bc5"
+      }
+    },
+    "android": {
+      "package": "com.raj7777.revisionai"
+    }
+  }
+}
